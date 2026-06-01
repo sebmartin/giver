@@ -1,0 +1,3 @@
+{"ts": "2026-06-01T14:29:35.309609+00:00", "node": "greet", "line": "starting 'greet'"}
+{"ts": "2026-06-01T14:29:35.313121+00:00", "node": "greet", "line": "hello from giver"}
+{"ts": "2026-06-01T14:29:35.313360+00:00", "node": "greet", "line": "'greet' completed in 0.0s"}

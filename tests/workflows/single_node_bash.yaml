@@ -1,0 +1,5 @@
+name: single-node-bash
+nodes:
+  - name: greet
+    type: bash
+    command: echo "hello from giver"

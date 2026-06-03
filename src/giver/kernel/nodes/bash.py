@@ -9,6 +9,7 @@ class BashNode(BaseModel):
     type: Literal["bash"]
     name: str
     command: str
+    depends_on: list[str] = []
 
     async def run(self) -> int:
         log = logging.getLogger(self.name)

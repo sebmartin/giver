@@ -7,6 +7,7 @@ from giver.kernel.nodes.bash import BashNode
 
 class Node(Protocol):
     name: str
+    depends_on: list[str]
 
     async def run(self) -> int: ...
 

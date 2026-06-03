@@ -1,0 +1,5 @@
+name: single-node-agent
+nodes:
+  - name: plan
+    type: agent
+    prompt: "Analyze the codebase and produce a plan"

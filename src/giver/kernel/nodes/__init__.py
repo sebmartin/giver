@@ -10,6 +10,7 @@ class Node(Protocol):
     name: str
     depends_on: list[str]
 
+    def should_skip(self) -> bool: ...
     async def run(self) -> int: ...
 
 

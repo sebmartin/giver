@@ -31,11 +31,34 @@ def test_prompt_with_special_chars_is_quoted():
     assert node.command == """pi --mode json -p 'it'"'"'s a plan'"""
 
 
+def test_model_absent_produces_no_flag():
+    node = AgentNode(type="agent", name="plan", prompt="hello")
+    assert "--model" not in node.command
+
+
+def test_model_set_is_included_in_command():
+    node = AgentNode(type="agent", name="plan", prompt="hello", model="claude-opus-4-8")
+    assert node.command == "pi --mode json --model claude-opus-4-8 -p hello"
+
+
+def test_model_with_spaces_is_quoted():
+    node = AgentNode(type="agent", name="plan", prompt="hello", model="foo bar")
+    assert node.command == "pi --mode json --model 'foo bar' -p hello"
+
+
 def test_yaml_loads_as_agent_node(workflows_dir):
     wf = Workflow.from_file(workflows_dir / "single_node_agent.yaml")
     node = wf.nodes[0]
     assert isinstance(node, AgentNode)
     assert node.prompt == "Analyze the codebase and produce a plan"
+
+
+def test_yaml_loads_model_field(workflows_dir):
+    wf = Workflow.from_file(workflows_dir / "single_node_agent_with_model.yaml")
+    node = wf.nodes[0]
+    assert isinstance(node, AgentNode)
+    assert node.model == "claude-opus-4-8"
+    assert node.command == "pi --mode json --model claude-opus-4-8 -p 'Analyze the codebase'"
 
 
 async def test_agent_node_runs_pi_and_logs_output(fake_pi, tmp_path):

@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from pathlib import Path
 from typing import Literal
 
 from pydantic import BaseModel
@@ -10,6 +11,10 @@ class BashNode(BaseModel):
     name: str
     command: str
     depends_on: list[str] = []
+    output: str | None = None
+
+    def should_skip(self) -> bool:
+        return self.output is not None and Path(self.output).exists()
 
     async def run(self) -> int:
         log = logging.getLogger(self.name)

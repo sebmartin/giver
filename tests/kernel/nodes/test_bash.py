@@ -41,3 +41,20 @@ async def test_run_logs_multiline(caplog):
     with caplog.at_level(logging.INFO, logger="test-node"):
         await node.run()
     assert ["a", "b", "c"] == [r.message for r in caplog.records]
+
+
+def test_should_skip_false_when_no_output():
+    node = BashNode(type="bash", name="n", command="true")
+    assert node.should_skip() is False
+
+
+def test_should_skip_false_when_output_missing():
+    node = BashNode(type="bash", name="n", command="true", output="/nonexistent/path/file.md")
+    assert node.should_skip() is False
+
+
+def test_should_skip_true_when_output_exists(tmp_path):
+    output = tmp_path / "result.md"
+    output.write_text("done")
+    node = BashNode(type="bash", name="n", command="true", output=str(output))
+    assert node.should_skip() is True

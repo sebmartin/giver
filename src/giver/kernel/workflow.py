@@ -64,6 +64,11 @@ class Workflow(BaseModel):
                 f"skipping {node.name!r}: a dependency did not succeed"
             )
             return False
+        if node.should_skip():
+            logging.getLogger(node.name).info(
+                f"skipping {node.name!r}: output already exists"
+            )
+            return True
         return await self._run_node(node) == 0
 
     async def _run_node(self, node: Node) -> int:

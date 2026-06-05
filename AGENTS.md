@@ -16,8 +16,8 @@ uv run pytest -v     # verbose
 ## Architecture rules
 
 - **The kernel runs inside Docker.** The CLI runs on the host, invokes `docker run`, and streams output back. Do not add interactive or host-signaling logic to the kernel.
-- **The kernel knows nothing about LLMs, Pi, prompts, or skills.** It only sees processes: command in, exit code out. LLM-specific behavior belongs in the agent wrapper command.
-- **Every node compiles to a bash command.** The DSL has node types (bash, agent) but the compiler distills them to shell commands before the kernel runs them. The kernel has no concept of node types at runtime.
+- **Pi/LLM knowledge is contained in the agent node.** `AgentNode` compiles a `prompt` into a `pi` command; the execution core (scheduler, subprocess, logging) and every other node stay Pi-ignorant — they only see processes: command in, exit code out. Pi's JSONL output streams to the node log like any stdout; agents write interesting results to files themselves.
+- **Every node compiles to a bash command.** Each node type carries or computes its own `command` (bash carries it; agent derives it from the prompt). The execution core runs the command and never branches on node type.
 - **No hardcoded workflows.** Workflows are user-provided YAML. give'r ships none.
 - **No `human_gate` node type.** Workflows run to completion unassisted. Human checkpoints happen between `giver run` invocations on the host, not inside give'r.
 - **Idempotency by artifact existence.** A node is skipped on re-run if its output artifact already exists. Do not hash agent outputs.

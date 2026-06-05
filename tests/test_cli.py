@@ -1,0 +1,94 @@
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+
+from giver.cli import cancel, run, _container_name
+
+
+def test_container_name_includes_stem():
+    assert _container_name("my-workflow").startswith("giver-my-workflow-")
+
+
+def _docker_calls(mock):
+    return [c[0][0] for c in mock.call_args_list]
+
+
+def _mock_side_effects():
+    return [
+        MagicMock(returncode=0),                    # docker run -d
+        MagicMock(returncode=0),                    # docker logs -f
+        MagicMock(returncode=0, stdout="0\n"),      # docker wait
+    ]
+
+
+def test_run_starts_detached_named_container(tmp_path):
+    wf = tmp_path / "workflow.yaml"
+    wf.write_text("name: test\nnodes: []")
+    runs_dir = tmp_path / "runs"
+
+    with patch("giver.cli.subprocess.run") as mock:
+        mock.side_effect = _mock_side_effects()
+        run(wf, runs_dir=runs_dir)
+
+    start_cmd = _docker_calls(mock)[0]
+    assert "-d" in start_cmd
+    assert f"{wf.resolve()}:/workflow.yaml:ro" in start_cmd
+    assert f"{runs_dir}:/runs" in start_cmd
+    assert "ANTHROPIC_API_KEY" in start_cmd
+    assert "giver:latest" in start_cmd
+
+
+def test_run_streams_logs_then_waits(tmp_path):
+    wf = tmp_path / "workflow.yaml"
+    wf.write_text("name: test\nnodes: []")
+
+    with patch("giver.cli.subprocess.run") as mock:
+        mock.side_effect = _mock_side_effects()
+        run(wf, runs_dir=tmp_path / "runs")
+
+    calls = _docker_calls(mock)
+    assert any("logs" in c for c in calls)
+    assert any("wait" in c for c in calls)
+
+
+def test_run_detach_skips_streaming(tmp_path):
+    wf = tmp_path / "workflow.yaml"
+    wf.write_text("name: test\nnodes: []")
+
+    with patch("giver.cli.subprocess.run", return_value=MagicMock(returncode=0)) as mock:
+        run(wf, runs_dir=tmp_path / "runs", detach=True)
+
+    assert not any("logs" in c for c in _docker_calls(mock))
+
+
+def test_run_returns_workflow_exit_code(tmp_path):
+    wf = tmp_path / "workflow.yaml"
+    wf.write_text("name: test\nnodes: []")
+
+    with patch("giver.cli.subprocess.run") as mock:
+        mock.side_effect = [
+            MagicMock(returncode=0),
+            MagicMock(returncode=0),
+            MagicMock(returncode=0, stdout="1\n"),
+        ]
+        assert run(wf, runs_dir=tmp_path / "runs") == 1
+
+
+def test_run_writes_runs_log(tmp_path):
+    wf = tmp_path / "workflow.yaml"
+    wf.write_text("name: test\nnodes: []")
+    runs_dir = tmp_path / "runs"
+
+    with patch("giver.cli.subprocess.run") as mock:
+        mock.side_effect = _mock_side_effects()
+        run(wf, runs_dir=runs_dir)
+
+    text = (runs_dir / "runs.log").read_text()
+    assert "start" in text
+    assert "exit 0" in text
+
+
+def test_cancel_stops_named_container():
+    with patch("giver.cli.subprocess.run", return_value=MagicMock(returncode=0)) as mock:
+        cancel("giver-my-workflow-12345")
+
+    assert mock.call_args[0][0] == ["docker", "stop", "giver-my-workflow-12345"]

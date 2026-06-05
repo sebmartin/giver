@@ -42,12 +42,24 @@ def test_ensure_image_builds_from_package_root_not_cwd():
         ]
         _ensure_image()
 
-    calls = _docker_calls(mock)
-    assert mock.call_count == 2  # inspect + exactly one build
-    build_cmd = calls[1]
+    build_cmd = _docker_calls(mock)[1]
     assert "build" in build_cmd
     assert str(_PROJECT_ROOT) in build_cmd
     assert "." not in build_cmd
+
+
+def test_ensure_image_builds_only_once_across_calls():
+    with patch("giver.cli.subprocess.run") as mock:
+        mock.side_effect = [
+            MagicMock(returncode=1),  # 1st call: inspect → not found
+            MagicMock(returncode=0),  # 1st call: build
+            MagicMock(returncode=0),  # 2nd call: inspect → found
+        ]
+        _ensure_image()
+        _ensure_image()
+
+    build_calls = [c for c in _docker_calls(mock) if "build" in c]
+    assert len(build_calls) == 1
 
 
 # ── run ───────────────────────────────────────────────────────────────────────

@@ -1,7 +1,7 @@
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
-from giver.cli import cancel, run, _container_name
+from giver.cli import cancel, run, _container_name, _ensure_image
 
 
 def test_container_name_includes_stem():
@@ -14,11 +14,37 @@ def _docker_calls(mock):
 
 def _mock_side_effects():
     return [
+        MagicMock(returncode=0),                    # docker image inspect (image exists)
         MagicMock(returncode=0),                    # docker run -d
         MagicMock(returncode=0),                    # docker logs -f
         MagicMock(returncode=0, stdout="0\n"),      # docker wait
     ]
 
+
+# ── _ensure_image ─────────────────────────────────────────────────────────────
+
+def test_ensure_image_skips_build_when_image_exists():
+    with patch("giver.cli.subprocess.run", return_value=MagicMock(returncode=0)) as mock:
+        _ensure_image()
+
+    calls = _docker_calls(mock)
+    assert ["docker", "image", "inspect", "giver:latest"] in calls
+    assert not any("build" in c for c in calls)
+
+
+def test_ensure_image_builds_when_image_missing():
+    with patch("giver.cli.subprocess.run") as mock:
+        mock.side_effect = [
+            MagicMock(returncode=1),   # docker image inspect → not found
+            MagicMock(returncode=0),   # docker build
+        ]
+        _ensure_image()
+
+    calls = _docker_calls(mock)
+    assert any("build" in c for c in calls)
+
+
+# ── run ───────────────────────────────────────────────────────────────────────
 
 def test_run_starts_detached_named_container(tmp_path):
     wf = tmp_path / "workflow.yaml"
@@ -29,7 +55,7 @@ def test_run_starts_detached_named_container(tmp_path):
         mock.side_effect = _mock_side_effects()
         run(wf, runs_dir=runs_dir)
 
-    start_cmd = _docker_calls(mock)[0]
+    start_cmd = _docker_calls(mock)[1]  # index 1: after inspect
     assert "-d" in start_cmd
     assert f"{wf.resolve()}:/workflow.yaml:ro" in start_cmd
     assert f"{runs_dir}:/runs" in start_cmd
@@ -66,9 +92,10 @@ def test_run_returns_workflow_exit_code(tmp_path):
 
     with patch("giver.cli.subprocess.run") as mock:
         mock.side_effect = [
-            MagicMock(returncode=0),
-            MagicMock(returncode=0),
-            MagicMock(returncode=0, stdout="1\n"),
+            MagicMock(returncode=0),                    # docker image inspect
+            MagicMock(returncode=0),                    # docker run -d
+            MagicMock(returncode=0),                    # docker logs -f
+            MagicMock(returncode=0, stdout="1\n"),      # docker wait → exit 1
         ]
         assert run(wf, runs_dir=tmp_path / "runs") == 1
 
@@ -86,6 +113,8 @@ def test_run_writes_runs_log(tmp_path):
     assert "start" in text
     assert "exit 0" in text
 
+
+# ── cancel ────────────────────────────────────────────────────────────────────
 
 def test_cancel_stops_named_container():
     with patch("giver.cli.subprocess.run", return_value=MagicMock(returncode=0)) as mock:

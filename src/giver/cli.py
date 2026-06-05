@@ -10,6 +10,15 @@ def _container_name(workflow_stem: str) -> str:
     return f"giver-{workflow_stem}-{int(time.time())}"
 
 
+def _ensure_image() -> None:
+    exists = subprocess.run(
+        ["docker", "image", "inspect", "giver:latest"],
+        capture_output=True,
+    ).returncode == 0
+    if not exists:
+        subprocess.run(["docker", "build", "-t", "giver:latest", "."], check=True)
+
+
 def _start(workflow_abs: Path, runs_dir: Path, name: str) -> None:
     subprocess.run([
         "docker", "run", "-d",
@@ -37,6 +46,7 @@ def run(workflow_path: Path, runs_dir: Path | None = None, detach: bool = False)
     name = _container_name(workflow_path.stem)
     _log(runs_dir, f"start container={name} workflow={workflow_abs} at {datetime.now(timezone.utc).isoformat()}")
 
+    _ensure_image()
     _start(workflow_abs, runs_dir, name)
 
     if detach:

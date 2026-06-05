@@ -95,5 +95,5 @@ Each step runs in the same Pi RPC session — the agent retains full context acr
 
 - [x] Phase 1: Kernel — bash nodes, `depends_on`, parallel DAG, agent nodes (Pi RPC, multi-step)
 - [x] Phase 2: Docker + CLI — `giver run`, `giver cancel`, auto-build, log streaming
-- [ ] Phase 3: Completion markers — rerun skips completed nodes
+- [x] Phase 3: Completion markers — `output:` field; node skipped on re-run if file exists
 - [ ] Phase 4: Plugin-mount — skills + workflow definitions mountable into the container

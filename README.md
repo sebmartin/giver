@@ -34,4 +34,4 @@ Runs inside Docker. The CLI runs on the host and invokes `docker run`.
 
 ## Status
 
-Early development — Phase 1 (kernel + single node) complete.
+Early development — the kernel runs YAML workflows of bash nodes with `depends_on`, executing the DAG in parallel and skipping nodes whose dependencies fail. Agent nodes, Docker, and the CLI are not built yet.

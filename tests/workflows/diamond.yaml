@@ -1,0 +1,17 @@
+name: diamond
+nodes:
+  - name: a
+    type: bash
+    command: echo a
+  - name: b
+    type: bash
+    command: sleep 0.1
+    depends_on: [a]
+  - name: c
+    type: bash
+    command: sleep 0.1
+    depends_on: [a]
+  - name: d
+    type: bash
+    command: echo d
+    depends_on: [b, c]

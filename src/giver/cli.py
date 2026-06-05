@@ -10,13 +10,19 @@ def _container_name(workflow_stem: str) -> str:
     return f"giver-{workflow_stem}-{int(time.time())}"
 
 
+_PROJECT_ROOT = Path(__file__).parents[2]
+
+
 def _ensure_image() -> None:
     exists = subprocess.run(
         ["docker", "image", "inspect", "giver:latest"],
         capture_output=True,
     ).returncode == 0
     if not exists:
-        subprocess.run(["docker", "build", "-t", "giver:latest", "."], check=True)
+        subprocess.run(
+            ["docker", "build", "-t", "giver:latest", str(_PROJECT_ROOT)],
+            check=True,
+        )
 
 
 def _start(workflow_abs: Path, runs_dir: Path, name: str) -> None:

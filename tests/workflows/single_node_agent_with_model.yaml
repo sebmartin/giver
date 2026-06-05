@@ -2,5 +2,8 @@ name: single-node-agent-with-model
 nodes:
   - name: plan
     type: agent
-    model: claude-opus-4-8
-    prompt: "Analyze the codebase"
+    model: claude-haiku-4
+    steps:
+      - prompt: "resume the thread"
+      - prompt: "plan the next step and save it as an artifact"
+        model: claude-opus-4

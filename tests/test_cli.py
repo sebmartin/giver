@@ -42,7 +42,9 @@ def test_ensure_image_builds_from_package_root_not_cwd():
         ]
         _ensure_image()
 
-    build_cmd = _docker_calls(mock)[1]
+    calls = _docker_calls(mock)
+    assert mock.call_count == 2  # inspect + exactly one build
+    build_cmd = calls[1]
     assert "build" in build_cmd
     assert str(_PROJECT_ROOT) in build_cmd
     assert "." not in build_cmd

@@ -45,7 +45,7 @@ class Workflow(BaseModel):
             raise ValueError("workflow has a dependency cycle")
         return self
 
-    async def run(self, log_dir: Path) -> None:
+    async def run(self, log_dir: Path) -> bool:
         log_dir.mkdir(parents=True, exist_ok=True)
         with Logger(log_dir, [n.name for n in self.nodes]):
             # create_task is synchronous, so every task exists before any body
@@ -53,7 +53,8 @@ class Workflow(BaseModel):
             tasks: dict[str, asyncio.Task[bool]] = {}
             for node in self.nodes:
                 tasks[node.name] = asyncio.create_task(self._run_when_ready(node, tasks))
-            await asyncio.gather(*tasks.values())
+            results = await asyncio.gather(*tasks.values())
+            return all(results)
 
     async def _run_when_ready(
         self, node: Node, tasks: dict[str, "asyncio.Task[bool]"]

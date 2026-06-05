@@ -132,3 +132,42 @@ def test_rejects_duplicate_names():
                 BashNode(type="bash", name="dup", command="true"),
             ],
         )
+
+
+async def test_node_with_existing_output_is_skipped(tmp_path):
+    output = tmp_path / "result.md"
+    output.write_text("already done")
+    marker = tmp_path / "marker"
+    wf = Workflow(
+        name="idempotent",
+        nodes=[BashNode(type="bash", name="work", command=f"touch {marker}", output=str(output))],
+    )
+    await wf.run(tmp_path)
+    assert not marker.exists()
+    assert "already exists" in (tmp_path / "work.log").read_text()
+
+
+async def test_node_with_missing_output_runs_normally(tmp_path):
+    output = tmp_path / "result.md"
+    marker = tmp_path / "marker"
+    wf = Workflow(
+        name="idempotent",
+        nodes=[BashNode(type="bash", name="work", command=f"touch {marker}", output=str(output))],
+    )
+    await wf.run(tmp_path)
+    assert marker.exists()
+
+
+async def test_skipped_node_does_not_block_dependents(tmp_path):
+    output = tmp_path / "result.md"
+    output.write_text("already done")
+    marker = tmp_path / "marker"
+    wf = Workflow(
+        name="idempotent",
+        nodes=[
+            BashNode(type="bash", name="a", command="true", output=str(output)),
+            BashNode(type="bash", name="b", command=f"touch {marker}", depends_on=["a"]),
+        ],
+    )
+    await wf.run(tmp_path)
+    assert marker.exists()

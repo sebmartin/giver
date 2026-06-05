@@ -93,7 +93,6 @@ Each step runs in the same Pi RPC session — the agent retains full context acr
 
 **Phase 2 complete.** Kernel runs bash + agent nodes with full DAG scheduling. Docker + CLI operational. Agent nodes use Pi RPC for multi-step, multi-model sessions.
 
-- [x] Phase 1: Kernel — bash nodes, `depends_on`, parallel DAG, agent nodes (Pi RPC, multi-step)
+- [x] Phase 1: Kernel — bash nodes, `depends_on`, parallel DAG, agent nodes (Pi RPC, multi-step), idempotency
 - [x] Phase 2: Docker + CLI — `giver run`, `giver cancel`, auto-build, log streaming
-- [x] Phase 3: Completion markers — `output:` field; node skipped on re-run if file exists
-- [ ] Phase 4: Plugin-mount — skills + workflow definitions mountable into the container
+- [ ] Phase 3: Plugin-mount — skills + workflow definitions mountable into the container

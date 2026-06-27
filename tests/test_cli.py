@@ -1,7 +1,7 @@
 import pytest
 from unittest.mock import MagicMock, patch
 
-from giver.cli import _PROJECT_ROOT, _container_name, _ensure_image, shell, cancel, run
+from giver.cli import _PROJECT_ROOT, _container_name, _ensure_image, cancel, run, shell
 
 
 def test_container_name_includes_stem():
@@ -180,31 +180,44 @@ def test_run_skips_pi_agent_mount_when_dir_missing(tmp_path):
 # ── shell ─────────────────────────────────────────────────────────────────────
 
 
-def test_shell_opens_interactive_terminal(tmp_path):
+def test_shell_pi_opens_interactive_pi_session(tmp_path):
     pi_dir = tmp_path / ".pi" / "agent"
 
     with patch("giver.cli._pi_agent_dir", return_value=pi_dir):
         with patch("giver.cli.subprocess.run", return_value=MagicMock(returncode=0)) as mock:
-            shell()
+            shell("pi")
 
-    shell_cmd = _docker_calls(mock)[1]  # index 1: after inspect
-    assert "--rm" in shell_cmd
-    assert "-it" in shell_cmd
-    assert "--entrypoint" in shell_cmd
-    assert "pi" in shell_cmd
-    assert "53692:53692" in shell_cmd
-    assert "PI_OAUTH_CALLBACK_HOST=0.0.0.0" in shell_cmd
-    assert f"{pi_dir}:/root/.pi/agent" in shell_cmd
+    cmd = _docker_calls(mock)[1]
+    assert "--rm" in cmd and "-it" in cmd
+    assert "53692:53692" in cmd
+    assert "PI_OAUTH_CALLBACK_HOST=0.0.0.0" in cmd
+    assert f"{pi_dir}:/root/.pi/agent" in cmd
+    assert "--entrypoint" in cmd and "pi" in cmd
 
 
-def test_shell_creates_pi_agent_dir(tmp_path):
+def test_shell_pi_creates_pi_agent_dir(tmp_path):
     pi_dir = tmp_path / ".pi" / "agent"
 
     with patch("giver.cli._pi_agent_dir", return_value=pi_dir):
         with patch("giver.cli.subprocess.run", return_value=MagicMock(returncode=0)):
-            shell()
+            shell("pi")
 
     assert pi_dir.exists()
+
+
+def test_shell_claude_opens_interactive_claude_session():
+    with patch("giver.cli.subprocess.run", return_value=MagicMock(returncode=0)) as mock:
+        shell("claude")
+
+    cmd = _docker_calls(mock)[1]
+    assert "--rm" in cmd and "-it" in cmd
+    assert "ANTHROPIC_API_KEY" in cmd
+    assert "--entrypoint" in cmd and "claude" in cmd
+
+
+def test_shell_unknown_provider_returns_1():
+    with patch("giver.cli.subprocess.run", return_value=MagicMock(returncode=0)):
+        assert shell("unknown") == 1
 
 
 # ── cancel ────────────────────────────────────────────────────────────────────

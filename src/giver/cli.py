@@ -2,6 +2,7 @@ import argparse
 import subprocess
 import sys
 import time
+from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -50,18 +51,36 @@ def _start(workflow_abs: Path, runs_dir: Path, name: str) -> None:
     subprocess.run(cmd)
 
 
-def shell() -> int:
-    _ensure_image()
+def _pi_shell_args() -> list[str]:
     pi_dir = _pi_agent_dir()
     pi_dir.mkdir(parents=True, exist_ok=True)
-    return subprocess.run([
-        "docker", "run", "--rm", "-it",
-        "--entrypoint", "pi",
+    return [
         "-p", "53692:53692",
         "-e", "PI_OAUTH_CALLBACK_HOST=0.0.0.0",
         "-v", f"{pi_dir}:/root/.pi/agent",
-        "giver:latest",
-    ]).returncode
+        "--entrypoint", "pi",
+    ]
+
+
+def _claude_shell_args() -> list[str]:
+    return ["-e", "ANTHROPIC_API_KEY", "--entrypoint", "claude"]
+
+
+_PROVIDER_SHELL_ARGS: dict[str, Callable[[], list[str]]] = {
+    "pi": _pi_shell_args,
+    "claude": _claude_shell_args,
+}
+
+
+def shell(provider: str) -> int:
+    _ensure_image()
+    args_fn = _PROVIDER_SHELL_ARGS.get(provider)
+    if args_fn is None:
+        print(f"error: unknown provider {provider!r}. choices: {', '.join(_PROVIDER_SHELL_ARGS)}", file=sys.stderr)
+        return 1
+    return subprocess.run(
+        ["docker", "run", "--rm", "-it"] + args_fn() + ["giver:latest"]
+    ).returncode
 
 
 def _stream(name: str) -> int:
@@ -111,7 +130,8 @@ def main() -> None:
     cancel_p = sub.add_parser("cancel", help="stop a running workflow container")
     cancel_p.add_argument("name", help="container name (from runs.log or giver run --detach)")
 
-    sub.add_parser("shell", help="open an interactive shell in the giver Docker image")
+    shell_p = sub.add_parser("shell", help="open an interactive shell for a provider")
+    shell_p.add_argument("provider", choices=list(_PROVIDER_SHELL_ARGS), help="provider to shell into")
 
     args = parser.parse_args()
     if args.command == "run":
@@ -119,4 +139,4 @@ def main() -> None:
     elif args.command == "cancel":
         sys.exit(cancel(args.name))
     elif args.command == "shell":
-        sys.exit(shell())
+        sys.exit(shell(args.provider))

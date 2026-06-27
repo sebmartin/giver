@@ -1,7 +1,7 @@
 import pytest
 from unittest.mock import MagicMock, patch
 
-from giver.cli import _PROJECT_ROOT, _container_name, _ensure_image, auth, cancel, run
+from giver.cli import _PROJECT_ROOT, _container_name, _ensure_image, shell, cancel, run
 
 
 def test_container_name_includes_stem():
@@ -177,32 +177,32 @@ def test_run_skips_pi_agent_mount_when_dir_missing(tmp_path):
     assert "/root/.pi/agent" not in start_cmd
 
 
-# ── auth ──────────────────────────────────────────────────────────────────────
+# ── shell ─────────────────────────────────────────────────────────────────────
 
 
-def test_auth_runs_pi_interactively(tmp_path):
+def test_shell_opens_interactive_terminal(tmp_path):
     pi_dir = tmp_path / ".pi" / "agent"
 
     with patch("giver.cli._pi_agent_dir", return_value=pi_dir):
         with patch("giver.cli.subprocess.run", return_value=MagicMock(returncode=0)) as mock:
-            auth()
+            shell()
 
-    auth_cmd = _docker_calls(mock)[1]  # index 1: after inspect
-    assert "--rm" in auth_cmd
-    assert "-it" in auth_cmd
-    assert "--entrypoint" in auth_cmd
-    assert "pi" in auth_cmd
-    assert "53692:53692" in auth_cmd
-    assert "PI_OAUTH_CALLBACK_HOST=0.0.0.0" in auth_cmd
-    assert f"{pi_dir}:/root/.pi/agent" in auth_cmd
+    shell_cmd = _docker_calls(mock)[1]  # index 1: after inspect
+    assert "--rm" in shell_cmd
+    assert "-it" in shell_cmd
+    assert "--entrypoint" in shell_cmd
+    assert "pi" in shell_cmd
+    assert "53692:53692" in shell_cmd
+    assert "PI_OAUTH_CALLBACK_HOST=0.0.0.0" in shell_cmd
+    assert f"{pi_dir}:/root/.pi/agent" in shell_cmd
 
 
-def test_auth_creates_pi_agent_dir(tmp_path):
+def test_shell_creates_pi_agent_dir(tmp_path):
     pi_dir = tmp_path / ".pi" / "agent"
 
     with patch("giver.cli._pi_agent_dir", return_value=pi_dir):
         with patch("giver.cli.subprocess.run", return_value=MagicMock(returncode=0)):
-            auth()
+            shell()
 
     assert pi_dir.exists()
 

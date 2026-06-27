@@ -50,7 +50,7 @@ def _start(workflow_abs: Path, runs_dir: Path, name: str) -> None:
     subprocess.run(cmd)
 
 
-def auth() -> int:
+def shell() -> int:
     _ensure_image()
     pi_dir = _pi_agent_dir()
     pi_dir.mkdir(parents=True, exist_ok=True)
@@ -111,12 +111,12 @@ def main() -> None:
     cancel_p = sub.add_parser("cancel", help="stop a running workflow container")
     cancel_p.add_argument("name", help="container name (from runs.log or giver run --detach)")
 
-    sub.add_parser("auth", help="log in to a model provider (Claude Pro/Max, etc.)")
+    sub.add_parser("shell", help="open an interactive shell in the giver Docker image")
 
     args = parser.parse_args()
     if args.command == "run":
         sys.exit(run(args.workflow, detach=args.detach))
     elif args.command == "cancel":
         sys.exit(cancel(args.name))
-    elif args.command == "auth":
-        sys.exit(auth())
+    elif args.command == "shell":
+        sys.exit(shell())

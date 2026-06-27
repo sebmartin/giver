@@ -63,7 +63,7 @@ def _pi_shell_args() -> list[str]:
 
 
 def _claude_shell_args() -> list[str]:
-    return ["-e", "ANTHROPIC_API_KEY", "--entrypoint", "claude"]
+    return ["--entrypoint", "claude"]
 
 
 _PROVIDER_SHELL_ARGS: dict[str, Callable[[], list[str]]] = {

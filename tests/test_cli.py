@@ -211,7 +211,6 @@ def test_shell_claude_opens_interactive_claude_session():
 
     cmd = _docker_calls(mock)[1]
     assert "--rm" in cmd and "-it" in cmd
-    assert "ANTHROPIC_API_KEY" in cmd
     assert "--entrypoint" in cmd and "claude" in cmd
 
 

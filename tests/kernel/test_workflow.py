@@ -171,3 +171,8 @@ async def test_skipped_node_does_not_block_dependents(tmp_path):
     )
     await wf.run(tmp_path)
     assert marker.exists()
+
+
+async def test_run_returns_true_when_all_nodes_succeed(tmp_path, workflows_dir):
+    wf = Workflow.from_file(workflows_dir / "single_node_bash.yaml")
+    assert await wf.run(tmp_path) is True

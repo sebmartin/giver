@@ -1,5 +1,6 @@
 name: single-node-agent
 nodes:
-  - name: plan
+  - name: greet
     type: agent
-    prompt: "Analyze the codebase and produce a plan"
+    steps:
+      - prompt: "say hello"

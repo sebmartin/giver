@@ -14,27 +14,54 @@ _PROJECT_ROOT = Path(__file__).parents[2]
 
 
 def _ensure_image() -> None:
-    exists = subprocess.run(
+    result = subprocess.run(
         ["docker", "image", "inspect", "giver:latest"],
         capture_output=True,
-    ).returncode == 0
-    if not exists:
-        subprocess.run(
-            ["docker", "build", "-t", "giver:latest", str(_PROJECT_ROOT)],
-            check=True,
-        )
+    )
+    if result.returncode == 0:
+        return
+    if subprocess.run(["docker", "info"], capture_output=True).returncode != 0:
+        print("error: Docker is not running", file=sys.stderr)
+        sys.exit(1)
+    result = subprocess.run(
+        ["docker", "build", "-t", "giver:latest", str(_PROJECT_ROOT)],
+    )
+    if result.returncode != 0:
+        print("error: image build failed", file=sys.stderr)
+        sys.exit(1)
+
+
+def _pi_agent_dir() -> Path:
+    return Path.home() / ".pi" / "agent"
 
 
 def _start(workflow_abs: Path, runs_dir: Path, name: str) -> None:
-    subprocess.run([
+    cmd = [
         "docker", "run", "-d",
         "--name", name,
         "-v", f"{workflow_abs}:/workflow.yaml:ro",
         "-v", f"{runs_dir}:/runs",
         "-e", "ANTHROPIC_API_KEY",
+    ]
+    pi_dir = _pi_agent_dir()
+    if pi_dir.exists():
+        cmd += ["-v", f"{pi_dir}:/root/.pi/agent:ro"]
+    cmd += ["giver:latest", "/workflow.yaml"]
+    subprocess.run(cmd)
+
+
+def auth() -> int:
+    _ensure_image()
+    pi_dir = _pi_agent_dir()
+    pi_dir.mkdir(parents=True, exist_ok=True)
+    return subprocess.run([
+        "docker", "run", "--rm", "-it",
+        "--entrypoint", "pi",
+        "-p", "53692:53692",
+        "-e", "PI_OAUTH_CALLBACK_HOST=0.0.0.0",
+        "-v", f"{pi_dir}:/root/.pi/agent",
         "giver:latest",
-        "/workflow.yaml",
-    ])
+    ]).returncode
 
 
 def _stream(name: str) -> int:
@@ -84,8 +111,12 @@ def main() -> None:
     cancel_p = sub.add_parser("cancel", help="stop a running workflow container")
     cancel_p.add_argument("name", help="container name (from runs.log or giver run --detach)")
 
+    sub.add_parser("auth", help="log in to a model provider (Claude Pro/Max, etc.)")
+
     args = parser.parse_args()
     if args.command == "run":
         sys.exit(run(args.workflow, detach=args.detach))
     elif args.command == "cancel":
         sys.exit(cancel(args.name))
+    elif args.command == "auth":
+        sys.exit(auth())

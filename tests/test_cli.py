@@ -1,6 +1,7 @@
+import pytest
 from unittest.mock import MagicMock, patch
 
-from giver.cli import _PROJECT_ROOT, _container_name, _ensure_image, cancel, run
+from giver.cli import _PROJECT_ROOT, _container_name, _ensure_image, auth, cancel, run
 
 
 def test_container_name_includes_stem():
@@ -38,11 +39,12 @@ def test_ensure_image_builds_from_package_root_not_cwd():
     with patch("giver.cli.subprocess.run") as mock:
         mock.side_effect = [
             MagicMock(returncode=1),  # docker image inspect → not found
+            MagicMock(returncode=0),  # docker info → daemon running
             MagicMock(returncode=0),  # docker build
         ]
         _ensure_image()
 
-    build_cmd = _docker_calls(mock)[1]
+    build_cmd = _docker_calls(mock)[2]
     assert "build" in build_cmd
     assert str(_PROJECT_ROOT) in build_cmd
     assert "." not in build_cmd
@@ -52,6 +54,7 @@ def test_ensure_image_builds_only_once_across_calls():
     with patch("giver.cli.subprocess.run") as mock:
         mock.side_effect = [
             MagicMock(returncode=1),  # 1st call: inspect → not found
+            MagicMock(returncode=0),  # 1st call: docker info
             MagicMock(returncode=0),  # 1st call: build
             MagicMock(returncode=0),  # 2nd call: inspect → found
         ]
@@ -60,6 +63,17 @@ def test_ensure_image_builds_only_once_across_calls():
 
     build_calls = [c for c in _docker_calls(mock) if "build" in c]
     assert len(build_calls) == 1
+
+
+def test_ensure_image_exits_cleanly_when_docker_not_running():
+    with patch("giver.cli.subprocess.run") as mock:
+        mock.side_effect = [
+            MagicMock(returncode=1),  # docker image inspect → not found
+            MagicMock(returncode=1),  # docker info → daemon not running
+        ]
+        with pytest.raises(SystemExit) as exc:
+            _ensure_image()
+    assert exc.value.code == 1
 
 
 # ── run ───────────────────────────────────────────────────────────────────────
@@ -133,6 +147,64 @@ def test_run_writes_runs_log(tmp_path):
     text = (runs_dir / "runs.log").read_text()
     assert "start" in text
     assert "exit 0" in text
+
+
+def test_run_mounts_pi_agent_when_dir_exists(tmp_path):
+    wf = tmp_path / "workflow.yaml"
+    wf.write_text("name: test\nnodes: []")
+    pi_dir = tmp_path / ".pi" / "agent"
+    pi_dir.mkdir(parents=True)
+
+    with patch("giver.cli._pi_agent_dir", return_value=pi_dir):
+        with patch("giver.cli.subprocess.run") as mock:
+            mock.side_effect = _mock_side_effects()
+            run(wf, runs_dir=tmp_path / "runs")
+
+    start_cmd = _docker_calls(mock)[1]
+    assert f"{pi_dir}:/root/.pi/agent:ro" in start_cmd
+
+
+def test_run_skips_pi_agent_mount_when_dir_missing(tmp_path):
+    wf = tmp_path / "workflow.yaml"
+    wf.write_text("name: test\nnodes: []")
+
+    with patch("giver.cli._pi_agent_dir", return_value=tmp_path / ".pi" / "agent"):
+        with patch("giver.cli.subprocess.run") as mock:
+            mock.side_effect = _mock_side_effects()
+            run(wf, runs_dir=tmp_path / "runs")
+
+    start_cmd = _docker_calls(mock)[1]
+    assert "/root/.pi/agent" not in start_cmd
+
+
+# ── auth ──────────────────────────────────────────────────────────────────────
+
+
+def test_auth_runs_pi_interactively(tmp_path):
+    pi_dir = tmp_path / ".pi" / "agent"
+
+    with patch("giver.cli._pi_agent_dir", return_value=pi_dir):
+        with patch("giver.cli.subprocess.run", return_value=MagicMock(returncode=0)) as mock:
+            auth()
+
+    auth_cmd = _docker_calls(mock)[1]  # index 1: after inspect
+    assert "--rm" in auth_cmd
+    assert "-it" in auth_cmd
+    assert "--entrypoint" in auth_cmd
+    assert "pi" in auth_cmd
+    assert "53692:53692" in auth_cmd
+    assert "PI_OAUTH_CALLBACK_HOST=0.0.0.0" in auth_cmd
+    assert f"{pi_dir}:/root/.pi/agent" in auth_cmd
+
+
+def test_auth_creates_pi_agent_dir(tmp_path):
+    pi_dir = tmp_path / ".pi" / "agent"
+
+    with patch("giver.cli._pi_agent_dir", return_value=pi_dir):
+        with patch("giver.cli.subprocess.run", return_value=MagicMock(returncode=0)):
+            auth()
+
+    assert pi_dir.exists()
 
 
 # ── cancel ────────────────────────────────────────────────────────────────────

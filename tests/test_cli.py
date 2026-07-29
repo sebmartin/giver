@@ -149,72 +149,52 @@ def test_run_writes_runs_log(tmp_path):
     assert "exit 0" in text
 
 
-def test_run_mounts_pi_agent_when_dir_exists(tmp_path):
-    wf = tmp_path / "workflow.yaml"
-    wf.write_text("name: test\nnodes: []")
-    pi_dir = tmp_path / ".pi" / "agent"
-    pi_dir.mkdir(parents=True)
-
-    with patch("giver.cli._pi_agent_dir", return_value=pi_dir):
-        with patch("giver.cli.subprocess.run") as mock:
-            mock.side_effect = _mock_side_effects()
-            run(wf, runs_dir=tmp_path / "runs")
-
-    start_cmd = _docker_calls(mock)[1]
-    assert f"{pi_dir}:/root/.pi/agent:ro" in start_cmd
-
-
-def test_run_skips_pi_agent_mount_when_dir_missing(tmp_path):
+def test_run_mounts_harness_credential_volumes_read_only(tmp_path):
     wf = tmp_path / "workflow.yaml"
     wf.write_text("name: test\nnodes: []")
 
-    with patch("giver.cli._pi_agent_dir", return_value=tmp_path / ".pi" / "agent"):
-        with patch("giver.cli.subprocess.run") as mock:
-            mock.side_effect = _mock_side_effects()
-            run(wf, runs_dir=tmp_path / "runs")
+    with patch("giver.cli.subprocess.run") as mock:
+        mock.side_effect = _mock_side_effects()
+        run(wf, runs_dir=tmp_path / "runs")
 
     start_cmd = _docker_calls(mock)[1]
-    assert "/root/.pi/agent" not in start_cmd
+    assert "giver-pi-creds:/root/.pi/agent:ro" in start_cmd
+    assert "giver-claude-creds:/root/.claude:ro" in start_cmd
 
 
 # ── shell ─────────────────────────────────────────────────────────────────────
 
 
-def test_shell_pi_opens_interactive_pi_session(tmp_path):
-    pi_dir = tmp_path / ".pi" / "agent"
-
-    with patch("giver.cli._pi_agent_dir", return_value=pi_dir):
-        with patch("giver.cli.subprocess.run", return_value=MagicMock(returncode=0)) as mock:
-            shell("pi")
+def test_shell_pi_drops_into_bash_with_pi_volume():
+    with patch("giver.cli.subprocess.run", return_value=MagicMock(returncode=0)) as mock:
+        shell("pi")
 
     cmd = _docker_calls(mock)[1]
     assert "--rm" in cmd and "-it" in cmd
     assert "53692:53692" in cmd
     assert "PI_OAUTH_CALLBACK_HOST=0.0.0.0" in cmd
-    assert f"{pi_dir}:/root/.pi/agent" in cmd
-    assert "--entrypoint" in cmd and "pi" in cmd
+    assert "giver-pi-creds:/root/.pi/agent" in cmd  # writable — login persists to the volume
+    assert cmd[-3:] == ["--entrypoint", "bash", "giver:latest"]
 
 
-def test_shell_pi_creates_pi_agent_dir(tmp_path):
-    pi_dir = tmp_path / ".pi" / "agent"
-
-    with patch("giver.cli._pi_agent_dir", return_value=pi_dir):
-        with patch("giver.cli.subprocess.run", return_value=MagicMock(returncode=0)):
-            shell("pi")
-
-    assert pi_dir.exists()
-
-
-def test_shell_claude_opens_interactive_claude_session():
+def test_shell_claude_drops_into_bash_with_claude_volume():
     with patch("giver.cli.subprocess.run", return_value=MagicMock(returncode=0)) as mock:
         shell("claude")
 
     cmd = _docker_calls(mock)[1]
-    assert "--rm" in cmd and "-it" in cmd
-    assert "--entrypoint" in cmd and "claude" in cmd
+    assert "giver-claude-creds:/root/.claude" in cmd
+    assert cmd[-3:] == ["--entrypoint", "bash", "giver:latest"]
 
 
-def test_shell_unknown_provider_returns_1():
+def test_shell_no_harness_is_bare_bash():
+    with patch("giver.cli.subprocess.run", return_value=MagicMock(returncode=0)) as mock:
+        shell()
+
+    cmd = _docker_calls(mock)[1]
+    assert cmd == ["docker", "run", "--rm", "-it", "--entrypoint", "bash", "giver:latest"]
+
+
+def test_shell_unknown_harness_returns_1():
     with patch("giver.cli.subprocess.run", return_value=MagicMock(returncode=0)):
         assert shell("unknown") == 1
 

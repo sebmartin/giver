@@ -2,7 +2,7 @@ import argparse
 import subprocess
 import sys
 import time
-from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -32,8 +32,34 @@ def _ensure_image() -> None:
         sys.exit(1)
 
 
-def _pi_agent_dir() -> Path:
-    return Path.home() / ".pi" / "agent"
+@dataclass(frozen=True)
+class Harness:
+    """A coding-agent CLI baked into the image, with an isolated credential store.
+
+    Credentials live in a Docker named volume, never on the host — the host need
+    not have the harness installed. `giver shell <name>` logs in (volume mounted
+    writable); `giver run` mounts the same volume read-only so the kernel reuses
+    that login.
+    """
+    volume: str
+    cred_container: str
+    ports: tuple[str, ...] = ()
+    env: tuple[str, ...] = ()
+
+
+def _harnesses() -> dict[str, Harness]:
+    return {
+        "pi": Harness(
+            volume="giver-pi-creds",
+            cred_container="/root/.pi/agent",
+            ports=("53692:53692",),
+            env=("PI_OAUTH_CALLBACK_HOST=0.0.0.0",),
+        ),
+        "claude": Harness(
+            volume="giver-claude-creds",
+            cred_container="/root/.claude",
+        ),
+    }
 
 
 def _start(workflow_abs: Path, runs_dir: Path, name: str) -> None:
@@ -44,43 +70,28 @@ def _start(workflow_abs: Path, runs_dir: Path, name: str) -> None:
         "-v", f"{runs_dir}:/runs",
         "-e", "ANTHROPIC_API_KEY",
     ]
-    pi_dir = _pi_agent_dir()
-    if pi_dir.exists():
-        cmd += ["-v", f"{pi_dir}:/root/.pi/agent:ro"]
+    for h in _harnesses().values():
+        cmd += ["-v", f"{h.volume}:{h.cred_container}:ro"]
     cmd += ["giver:latest", "/workflow.yaml"]
     subprocess.run(cmd)
 
 
-def _pi_shell_args() -> list[str]:
-    pi_dir = _pi_agent_dir()
-    pi_dir.mkdir(parents=True, exist_ok=True)
-    return [
-        "-p", "53692:53692",
-        "-e", "PI_OAUTH_CALLBACK_HOST=0.0.0.0",
-        "-v", f"{pi_dir}:/root/.pi/agent",
-        "--entrypoint", "pi",
-    ]
-
-
-def _claude_shell_args() -> list[str]:
-    return ["--entrypoint", "claude"]
-
-
-_PROVIDER_SHELL_ARGS: dict[str, Callable[[], list[str]]] = {
-    "pi": _pi_shell_args,
-    "claude": _claude_shell_args,
-}
-
-
-def shell(provider: str) -> int:
+def shell(harness: str | None = None) -> int:
     _ensure_image()
-    args_fn = _PROVIDER_SHELL_ARGS.get(provider)
-    if args_fn is None:
-        print(f"error: unknown provider {provider!r}. choices: {', '.join(_PROVIDER_SHELL_ARGS)}", file=sys.stderr)
-        return 1
-    return subprocess.run(
-        ["docker", "run", "--rm", "-it"] + args_fn() + ["giver:latest"]
-    ).returncode
+    cmd = ["docker", "run", "--rm", "-it"]
+    if harness is not None:
+        harnesses = _harnesses()
+        h = harnesses.get(harness)
+        if h is None:
+            print(f"error: unknown harness {harness!r}. choices: {', '.join(harnesses)}", file=sys.stderr)
+            return 1
+        for p in h.ports:
+            cmd += ["-p", p]
+        for e in h.env:
+            cmd += ["-e", e]
+        cmd += ["-v", f"{h.volume}:{h.cred_container}"]
+    cmd += ["--entrypoint", "bash", "giver:latest"]
+    return subprocess.run(cmd).returncode
 
 
 def _stream(name: str) -> int:
@@ -130,8 +141,13 @@ def main() -> None:
     cancel_p = sub.add_parser("cancel", help="stop a running workflow container")
     cancel_p.add_argument("name", help="container name (from runs.log or giver run --detach)")
 
-    shell_p = sub.add_parser("shell", help="open an interactive shell for a provider")
-    shell_p.add_argument("provider", choices=list(_PROVIDER_SHELL_ARGS), help="provider to shell into")
+    shell_p = sub.add_parser("shell", help="open an interactive shell in the giver container")
+    shell_p.add_argument(
+        "harness",
+        nargs="?",
+        choices=list(_harnesses()),
+        help="harness whose credentials to mount (omit for a bare container shell)",
+    )
 
     args = parser.parse_args()
     if args.command == "run":
@@ -139,4 +155,4 @@ def main() -> None:
     elif args.command == "cancel":
         sys.exit(cancel(args.name))
     elif args.command == "shell":
-        sys.exit(shell(args.provider))
+        sys.exit(shell(args.harness))

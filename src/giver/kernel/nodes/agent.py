@@ -19,73 +19,82 @@ class AgentRunner(Protocol):
 
 
 class PiRunner:
+    """Drives pi as a stateless one-shot per step, threading continuity through
+    `--fork <session>`. Forking (rather than continuing in place) leaves the parent
+    session untouched, so replaying a step from a checkpoint is idempotent.
+    Per-step model switching falls out for free: each step spawns its own process.
+    """
+
     async def run(
         self, steps: list[AgentStep], default_model: str | None, log: logging.Logger
     ) -> int:
-        cmd = ["pi", "--mode", "rpc"]
-        if default_model:
-            cmd += ["--model", default_model]
-
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        asyncio.create_task(_drain_stderr(proc, log))
-
-        current_model = default_model
+        session_id: str | None = None
         for step in steps:
-            step_model = step.model or default_model
-            if step_model and step_model != current_model:
-                await _send(proc, {
-                    "type": "set_model",
-                    "provider": _infer_provider(step_model),
-                    "modelId": step_model,
-                })
-                current_model = step_model
-            await _send(proc, {"type": "prompt", "message": step.prompt})
-            if not await _wait_for_agent_end(proc, log):
-                proc.stdin.close()
-                await proc.wait()
-                return 1
+            cmd = ["pi", "--mode", "json", "--print"]
+            model = step.model or default_model
+            if model:
+                cmd += ["--model", model]
+            if session_id:
+                cmd += ["--fork", session_id]
 
-        proc.stdin.close()
-        return await proc.wait()
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            asyncio.create_task(_drain_stderr(proc, log))
+            proc.stdin.write(step.prompt.encode())
+            await proc.stdin.drain()
+            proc.stdin.close()
+
+            ok, session_id = await _consume_pi_stream(proc, log, session_id)
+            await proc.wait()
+            if not ok:
+                return 1
+        return 0
 
 
 class ClaudeRunner:
     async def run(
         self, steps: list[AgentStep], default_model: str | None, log: logging.Logger
     ) -> int:
-        from claude_agent_sdk import (  # type: ignore[import]
-            AssistantMessage,
-            ClaudeAgentOptions,
-            ResultMessage,
-            TextBlock,
-            query,
-        )
-
         session_id: str | None = None
         for step in steps:
-            options = ClaudeAgentOptions(
-                model=step.model or default_model,
-                resume=session_id,
-                permission_mode="bypassPermissions",
+            cmd = [
+                "claude", "--print",
+                "--output-format", "stream-json",
+                "--verbose",
+                "--permission-mode", "bypassPermissions",
+            ]
+            model = step.model or default_model
+            if model:
+                cmd += ["--model", model]
+            if session_id:
+                # --fork-session is opt-in: without it --resume continues in place and
+                # mutates the parent session, so replaying a checkpointed step would
+                # corrupt the branch being resumed from.
+                cmd += ["--resume", session_id, "--fork-session"]
+
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
             )
-            async for message in query(step.prompt, options=options):
-                if isinstance(message, AssistantMessage):
-                    for block in message.content:
-                        if isinstance(block, TextBlock):
-                            log.info(block.text)
-                elif isinstance(message, ResultMessage):
-                    session_id = message.session_id
-                    if message.subtype != "success":
-                        return 1
+            asyncio.create_task(_drain_stderr(proc, log))
+            proc.stdin.write(step.prompt.encode())
+            await proc.stdin.drain()
+            proc.stdin.close()
+
+            ok, session_id = await _consume_claude_stream(proc, log, session_id)
+            await proc.wait()
+            if not ok:
+                return 1
         return 0
 
 
-_RUNNER_FOR_PROVIDER: dict[str | None, type] = {
+_RUNNER_FOR_PROVIDER: dict[str, type[AgentRunner]] = {
     "anthropic": ClaudeRunner,
     "openai": PiRunner,
     "local": PiRunner,
@@ -110,14 +119,17 @@ class AgentNode(BaseModel):
     output: str | None = None
     steps: list[AgentStep]
 
-    @model_validator(mode="after")
-    def _validate_single_runner(self) -> "AgentNode":
-        runners = {
+    def _runners(self) -> set[type[AgentRunner]]:
+        return {
             _RUNNER_FOR_PROVIDER.get(_infer_provider(step.model or self.model), PiRunner)
             for step in self.steps
         }
+
+    @model_validator(mode="after")
+    def _validate_single_runner(self) -> "AgentNode":
+        runners = self._runners()
         if len(runners) > 1:
-            names = ", ".join(r.__name__ for r in sorted(runners, key=lambda r: r.__name__))
+            names = ", ".join(sorted(r.__name__ for r in runners))
             raise ValueError(
                 f"Node {self.name!r} mixes runners ({names}). "
                 "Use separate nodes for cross-vendor workflows."
@@ -129,26 +141,48 @@ class AgentNode(BaseModel):
 
     async def run(self) -> int:
         log = logging.getLogger(self.name)
-        providers = {_infer_provider(step.model or self.model) for step in self.steps}
-        runner_cls = _RUNNER_FOR_PROVIDER.get(next(iter(providers)), PiRunner)
+        runner_cls = next(iter(self._runners()))
         return await runner_cls().run(self.steps, self.model, log)
 
 
-async def _send(proc: asyncio.subprocess.Process, cmd: dict) -> None:
-    proc.stdin.write((json.dumps(cmd) + "\n").encode())
-    await proc.stdin.drain()
-
-
-async def _wait_for_agent_end(proc: asyncio.subprocess.Process, log: logging.Logger) -> bool:
+async def _consume_pi_stream(
+    proc: asyncio.subprocess.Process, log: logging.Logger, session_id: str | None
+) -> tuple[bool, str | None]:
+    success = False
     async for raw in proc.stdout:
-        event = json.loads(raw)
-        if event.get("type") == "message_update":
+        try:
+            event = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if event.get("type") == "session":
+            session_id = event.get("sessionId") or event.get("id") or session_id
+        elif event.get("type") == "message_update":
             delta = event.get("assistantMessageEvent", {})
             if delta.get("type") == "text_delta":
                 log.info(delta["delta"])
         elif event.get("type") == "agent_end":
-            return not event.get("willRetry", False)
-    return False
+            success = not event.get("willRetry", False)
+    return success, session_id
+
+
+async def _consume_claude_stream(
+    proc: asyncio.subprocess.Process, log: logging.Logger, session_id: str | None
+) -> tuple[bool, str | None]:
+    success = False
+    async for raw in proc.stdout:
+        try:
+            event = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if sid := event.get("session_id"):
+            session_id = sid
+        if event.get("type") == "assistant":
+            for block in event.get("message", {}).get("content", []):
+                if block.get("type") == "text":
+                    log.info(block["text"])
+        elif event.get("type") == "result":
+            success = event.get("subtype") == "success" and not event.get("is_error", False)
+    return success, session_id
 
 
 async def _drain_stderr(proc: asyncio.subprocess.Process, log: logging.Logger) -> None:

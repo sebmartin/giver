@@ -1,7 +1,5 @@
 import json
 import logging
-import sys
-import types
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -52,51 +50,22 @@ _TEXT = [
 ]
 
 
-def _written_commands(proc) -> list[dict]:
-    raw = b"".join(c[0][0] for c in proc.stdin.write.call_args_list)
-    return [json.loads(line) for line in raw.decode().splitlines() if line]
+def _pi_session(session_id: str) -> list[dict]:
+    return [{"type": "session", "sessionId": session_id}]
 
 
-# ── helpers: ClaudeRunner / fake SDK ─────────────────────────────────────────
+# ── helpers: ClaudeRunner / claude CLI stream-json ───────────────────────────
 
-class _TextBlock:
-    def __init__(self, text: str):
-        self.text = text
-
-
-class _AssistantMessage:
-    def __init__(self, *blocks):
-        self.content = list(blocks)
+def _claude_text(text: str, session_id: str = "s1") -> dict:
+    return {
+        "type": "assistant",
+        "message": {"content": [{"type": "text", "text": text}]},
+        "session_id": session_id,
+    }
 
 
-class _ResultMessage:
-    def __init__(self, session_id: str, subtype: str = "success"):
-        self.session_id = session_id
-        self.subtype = subtype
-
-
-class _ClaudeAgentOptions:
-    def __init__(self, **kwargs):
-        for k, v in kwargs.items():
-            setattr(self, k, v)
-
-
-def _fake_sdk(calls_out: list, events_by_call: list[list]) -> types.ModuleType:
-    """Fake claude_agent_sdk; appends {prompt, options} to calls_out per query call."""
-    module = types.ModuleType("claude_agent_sdk")
-    module.TextBlock = _TextBlock
-    module.AssistantMessage = _AssistantMessage
-    module.ResultMessage = _ResultMessage
-    module.ClaudeAgentOptions = _ClaudeAgentOptions
-
-    async def query(prompt, options=None):
-        idx = len(calls_out)
-        calls_out.append({"prompt": prompt, "options": options})
-        for event in events_by_call[idx]:
-            yield event
-
-    module.query = query
-    return module
+def _claude_result(session_id: str, subtype: str = "success", is_error: bool = False) -> dict:
+    return {"type": "result", "subtype": subtype, "is_error": is_error, "session_id": session_id}
 
 
 # ── AgentNode: no model → PiRunner via subprocess ────────────────────────────
@@ -128,34 +97,44 @@ async def test_run_stops_after_failed_step():
     )
     failed = [{"type": "agent_end", "willRetry": True}]
     proc = _mock_proc(failed)
-    with patch("giver.kernel.nodes.agent.asyncio.create_subprocess_exec", return_value=proc):
+    with patch("giver.kernel.nodes.agent.asyncio.create_subprocess_exec", return_value=proc) as m:
         result = await node.run()
 
     assert result == 1
-    prompts = [c["message"] for c in _written_commands(proc) if c.get("type") == "prompt"]
-    assert prompts == ["p1"]
+    # one-shot per step: a step that never ran is a process that never spawned
+    assert m.call_count == 1
 
 
 # ── PiRunner: model switching ─────────────────────────────────────────────────
 
-async def test_pi_runner_sends_set_model_when_step_overrides():
-    steps = [AgentStep(prompt="step 1"), AgentStep(prompt="step 2", model="gpt-4-turbo")]
-    proc = _mock_proc(_DONE, _DONE)
-    with patch("giver.kernel.nodes.agent.asyncio.create_subprocess_exec", return_value=proc):
-        await PiRunner().run(steps, default_model="gpt-4o", log=logging.getLogger("n"))
+async def test_pi_runner_uses_step_model_over_default():
+    """Each step spawns its own process, so model switching is just a per-step flag."""
+    procs = [_mock_proc(_DONE), _mock_proc(_DONE)]
+    with patch("giver.kernel.nodes.agent.asyncio.create_subprocess_exec", side_effect=procs) as m:
+        await PiRunner().run(
+            [AgentStep(prompt="step 1"), AgentStep(prompt="step 2", model="gpt-4-turbo")],
+            default_model="gpt-4o",
+            log=logging.getLogger("n"),
+        )
 
-    cmds = _written_commands(proc)
-    assert {"type": "set_model", "provider": "openai", "modelId": "gpt-4-turbo"} in cmds
+    first_cmd, second_cmd = m.call_args_list[0][0], m.call_args_list[1][0]
+    assert first_cmd[first_cmd.index("--model") + 1] == "gpt-4o"
+    assert second_cmd[second_cmd.index("--model") + 1] == "gpt-4-turbo"
 
 
-async def test_pi_runner_no_set_model_when_step_uses_default():
-    steps = [AgentStep(prompt="p1"), AgentStep(prompt="p2")]
-    proc = _mock_proc(_DONE, _DONE)
-    with patch("giver.kernel.nodes.agent.asyncio.create_subprocess_exec", return_value=proc):
-        await PiRunner().run(steps, default_model="gpt-4o", log=logging.getLogger("n"))
+async def test_pi_runner_forks_session_from_first_step():
+    """Fork rather than continue in place, so replay can't mutate the parent session."""
+    procs = [_mock_proc(_pi_session("sess-abc") + _DONE), _mock_proc(_DONE)]
+    with patch("giver.kernel.nodes.agent.asyncio.create_subprocess_exec", side_effect=procs) as m:
+        await PiRunner().run(
+            [AgentStep(prompt="p1"), AgentStep(prompt="p2")],
+            default_model="gpt-4o",
+            log=logging.getLogger("n"),
+        )
 
-    cmds = _written_commands(proc)
-    assert not any(c.get("type") == "set_model" for c in cmds)
+    first_cmd, second_cmd = m.call_args_list[0][0], m.call_args_list[1][0]
+    assert "--fork" not in first_cmd
+    assert second_cmd[second_cmd.index("--fork") + 1] == "sess-abc"
 
 
 # ── AgentNode: load-time runner validation ────────────────────────────────────
@@ -177,47 +156,56 @@ def test_node_accepts_same_vendor_steps():
 
 # ── ClaudeRunner ──────────────────────────────────────────────────────────────
 
-async def test_claude_runner_logs_text_and_returns_0(caplog, monkeypatch):
-    calls: list = []
-    events = [[_AssistantMessage(_TextBlock("hello")), _ResultMessage("s1")]]
-    monkeypatch.setitem(sys.modules, "claude_agent_sdk", _fake_sdk(calls, events))
-
+async def test_claude_runner_logs_text_and_returns_0(caplog):
+    proc = _mock_proc([_claude_text("hello"), _claude_result("s1")])
     with caplog.at_level(logging.INFO):
-        result = await ClaudeRunner().run(
-            [AgentStep(prompt="go")], default_model=None, log=logging.getLogger("t")
-        )
+        with patch("giver.kernel.nodes.agent.asyncio.create_subprocess_exec", return_value=proc):
+            result = await ClaudeRunner().run(
+                [AgentStep(prompt="go")], default_model=None, log=logging.getLogger("t")
+            )
 
     assert result == 0
     assert "hello" in caplog.text
-    assert calls[0]["prompt"] == "go"
+    written = b"".join(c[0][0] for c in proc.stdin.write.call_args_list)
+    assert written == b"go"
 
 
-async def test_claude_runner_passes_session_id_on_second_step(monkeypatch):
-    calls: list = []
-    events = [
-        [_ResultMessage("sess-abc")],
-        [_ResultMessage("sess-xyz")],
-    ]
-    monkeypatch.setitem(sys.modules, "claude_agent_sdk", _fake_sdk(calls, events))
+async def test_claude_runner_forks_session_from_first_step():
+    """Resume must fork: bare --resume continues in place and mutates the parent
+    session, which would corrupt the branch a checkpointed replay resumes from."""
+    procs = [_mock_proc([_claude_result("sess-abc")]), _mock_proc([_claude_result("sess-xyz")])]
+    with patch("giver.kernel.nodes.agent.asyncio.create_subprocess_exec", side_effect=procs) as m:
+        await ClaudeRunner().run(
+            [AgentStep(prompt="step1"), AgentStep(prompt="step2")],
+            default_model=None,
+            log=logging.getLogger("t"),
+        )
 
-    await ClaudeRunner().run(
-        [AgentStep(prompt="step1"), AgentStep(prompt="step2")],
-        default_model=None,
-        log=logging.getLogger("t"),
-    )
-
-    assert calls[0]["options"].resume is None
-    assert calls[1]["options"].resume == "sess-abc"
+    first_cmd, second_cmd = m.call_args_list[0][0], m.call_args_list[1][0]
+    assert "--resume" not in first_cmd and "--fork-session" not in first_cmd
+    assert second_cmd[second_cmd.index("--resume") + 1] == "sess-abc"
+    assert "--fork-session" in second_cmd
 
 
-async def test_claude_runner_returns_1_on_non_success(monkeypatch):
-    calls: list = []
-    events = [[_ResultMessage("s1", subtype="error_max_turns")]]
-    monkeypatch.setitem(sys.modules, "claude_agent_sdk", _fake_sdk(calls, events))
+async def test_claude_runner_passes_model_per_step():
+    proc = _mock_proc([_claude_result("s1")])
+    with patch("giver.kernel.nodes.agent.asyncio.create_subprocess_exec", return_value=proc) as m:
+        await ClaudeRunner().run(
+            [AgentStep(prompt="go", model="claude-opus-4")],
+            default_model="claude-haiku-4",
+            log=logging.getLogger("t"),
+        )
 
-    result = await ClaudeRunner().run(
-        [AgentStep(prompt="go")], default_model=None, log=logging.getLogger("t")
-    )
+    cmd = m.call_args_list[0][0]
+    assert "--model" in cmd and "claude-opus-4" in cmd
+
+
+async def test_claude_runner_returns_1_on_non_success():
+    proc = _mock_proc([_claude_result("s1", subtype="error_max_turns", is_error=True)])
+    with patch("giver.kernel.nodes.agent.asyncio.create_subprocess_exec", return_value=proc):
+        result = await ClaudeRunner().run(
+            [AgentStep(prompt="go")], default_model=None, log=logging.getLogger("t")
+        )
     assert result == 1
 
 

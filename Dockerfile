@@ -7,6 +7,7 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 RUN npm install -g --ignore-scripts @earendil-works/pi-coding-agent
+RUN npm install -g @anthropic-ai/claude-code
 
 WORKDIR /app
 COPY pyproject.toml uv.lock ./

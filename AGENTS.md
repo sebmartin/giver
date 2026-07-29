@@ -31,7 +31,7 @@ uv run pytest -v     # verbose
 - Each node type owns its model and runner in the same file — no monolithic `models.py`
 - New node types are additive: extend the discriminated union on `type`, don't modify existing nodes
 - Logging is scoped to an execution — `Logger` sets up handlers per node name, is used as a context manager, and tears down on exit; never accumulate global handlers
-- The kernel is everything that runs in Docker — workflow loading, DAG scheduling, nodes, logging all live under `kernel/`. The host-only CLI is the sole layer outside it; nothing in `kernel` imports from the CLI
+- The CLI is a host-side wrapper that runs the kernel inside a Docker container; the kernel is agnostic of that infrastructure and could run on the host directly. The CLI and kernel may share code, but the kernel must not depend on `cli`.
 - No stubs or empty files — add files when the code exists
 
 ## Testing

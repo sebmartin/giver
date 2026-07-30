@@ -2,6 +2,7 @@ import argparse
 import subprocess
 import sys
 import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -14,27 +15,83 @@ _PROJECT_ROOT = Path(__file__).parents[2]
 
 
 def _ensure_image() -> None:
-    exists = subprocess.run(
+    result = subprocess.run(
         ["docker", "image", "inspect", "giver:latest"],
         capture_output=True,
-    ).returncode == 0
-    if not exists:
-        subprocess.run(
-            ["docker", "build", "-t", "giver:latest", str(_PROJECT_ROOT)],
-            check=True,
-        )
+    )
+    if result.returncode == 0:
+        return
+    if subprocess.run(["docker", "info"], capture_output=True).returncode != 0:
+        print("error: Docker is not running", file=sys.stderr)
+        sys.exit(1)
+    result = subprocess.run(
+        ["docker", "build", "-t", "giver:latest", str(_PROJECT_ROOT)],
+    )
+    if result.returncode != 0:
+        print("error: image build failed", file=sys.stderr)
+        sys.exit(1)
+
+
+@dataclass(frozen=True)
+class Harness:
+    """A coding-agent CLI baked into the image, with an isolated credential store.
+
+    Credentials live in a Docker named volume, never on the host — the host need
+    not have the harness installed. `giver shell <name>` logs in (volume mounted
+    writable); `giver run` mounts the same volume read-only so the kernel reuses
+    that login.
+    """
+    volume: str
+    cred_container: str
+    ports: tuple[str, ...] = ()
+    env: tuple[str, ...] = ()
+
+
+def _harnesses() -> dict[str, Harness]:
+    return {
+        "pi": Harness(
+            volume="giver-pi-creds",
+            cred_container="/root/.pi/agent",
+            ports=("53692:53692",),
+            env=("PI_OAUTH_CALLBACK_HOST=0.0.0.0",),
+        ),
+        "claude": Harness(
+            volume="giver-claude-creds",
+            cred_container="/root/.claude",
+        ),
+    }
 
 
 def _start(workflow_abs: Path, runs_dir: Path, name: str) -> None:
-    subprocess.run([
+    cmd = [
         "docker", "run", "-d",
         "--name", name,
         "-v", f"{workflow_abs}:/workflow.yaml:ro",
         "-v", f"{runs_dir}:/runs",
         "-e", "ANTHROPIC_API_KEY",
-        "giver:latest",
-        "/workflow.yaml",
-    ])
+    ]
+    for h in _harnesses().values():
+        cmd += ["-v", f"{h.volume}:{h.cred_container}:ro"]
+    cmd += ["giver:latest", "/workflow.yaml"]
+    subprocess.run(cmd)
+
+
+def shell(harness: str | None = None) -> int:
+    _ensure_image()
+    cmd = ["docker", "run", "--rm", "-it"]
+    if harness is not None:
+        harnesses = _harnesses()
+        h = harnesses.get(harness)
+        if h is None:
+            print(f"error: unknown harness {harness!r}. choices: {', '.join(harnesses)}", file=sys.stderr)
+            return 1
+        for p in h.ports:
+            cmd += ["-p", p]
+        for e in h.env:
+            cmd += ["-e", e]
+        cmd += ["-v", f"{h.volume}:{h.cred_container}"]
+    cmd += ["--entrypoint", "bash", "giver:latest"]
+    return subprocess.run(cmd).returncode
 
 
 def _stream(name: str) -> int:
@@ -84,8 +141,18 @@ def main() -> None:
     cancel_p = sub.add_parser("cancel", help="stop a running workflow container")
     cancel_p.add_argument("name", help="container name (from runs.log or giver run --detach)")
 
+    shell_p = sub.add_parser("shell", help="open an interactive shell in the giver container")
+    shell_p.add_argument(
+        "harness",
+        nargs="?",
+        choices=list(_harnesses()),
+        help="harness whose credentials to mount (omit for a bare container shell)",
+    )
+
     args = parser.parse_args()
     if args.command == "run":
         sys.exit(run(args.workflow, detach=args.detach))
     elif args.command == "cancel":
         sys.exit(cancel(args.name))
+    elif args.command == "shell":
+        sys.exit(shell(args.harness))

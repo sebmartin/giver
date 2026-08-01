@@ -4,7 +4,7 @@
 
 give'r is a **parallel workflow engine for LLM agents**. It takes a workflow file and executes it. That is the entire contract. It has no knowledge of what workflows mean, what tasks are, or what agents do.
 
-For full architecture and design decisions see `decisions/`.
+See `README.md` for the workflow DSL, the harness model, and how credentials work.
 
 ## Commands
 

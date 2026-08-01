@@ -47,7 +47,7 @@ def test_harness_by_name():
 
 
 def test_unknown_harness_lists_the_choices():
-    with pytest.raises(ValueError, match="unknown harness 'nope'. choices: claude, pi"):
+    with pytest.raises(ValueError, match="unknown harness 'nope'. choices: claude, codex, pi"):
         harness_by_name("nope")
 
 
@@ -71,3 +71,29 @@ def test_harnesses_declare_the_infra_the_cli_needs():
         ("53692:53692",),
         {"PI_OAUTH_CALLBACK_HOST": "0.0.0.0"},
     )
+
+
+def test_codex_is_registered_and_serves_openai():
+    from giver.harness import CodexHarness
+
+    assert harness_by_name("codex").name == "codex"
+    assert CodexHarness().serves("openai") and not CodexHarness().serves("anthropic")
+
+
+def test_every_harness_declares_whether_it_can_fork():
+    """Forking is what makes a replayed step idempotent, and it is not
+    universal — codex's headless resume continues a thread in place."""
+    from giver.harness import HARNESSES
+
+    assert {h.name: h.forks_on_resume for h in HARNESSES} == {
+        "claude": True,
+        "codex": False,
+        "pi": True,
+    }
+
+
+def test_the_default_harness_is_named_not_positional():
+    from giver.harness import DEFAULT_HARNESS_NAME
+
+    assert DEFAULT_HARNESS_NAME == "pi"
+    assert harness_by_name(None).name == DEFAULT_HARNESS_NAME

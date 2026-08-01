@@ -37,7 +37,7 @@ giver run workflow.yaml
 
 ## Harnesses
 
-A **harness** is a coding-agent CLI that give'r drives — `pi` or `claude` today. give'r orchestrates; the harness does the agent work. One class describes each one: where it keeps credentials and sessions, what environment and ports it needs, how it gets installed, its REPL command, which vendors it can serve, and how to run a node's steps.
+A **harness** is a coding-agent CLI that give'r drives — `pi`, `claude` or `codex`. give'r orchestrates; the harness does the agent work. One class describes each one: where it keeps credentials and sessions, what environment and ports it needs, how it gets installed, its REPL command, which vendors it can serve, and how to run a node's steps.
 
 Nothing in give'r branches on which harness is running. Anything harness-specific is expressed through a mechanism every harness has, so adding one is a single class.
 
@@ -49,7 +49,15 @@ defaults:
   model: anthropic/claude-opus-4-5
 ```
 
-Harnesses are driven as one-shot invocations per step, with continuity threaded through the harness's own session — `--fork` for pi, `--resume --fork-session` for claude. Forking rather than continuing in place leaves the parent session untouched, so re-running a step can't corrupt the one it branched from.
+Harnesses are driven as one-shot invocations per step, with continuity threaded through the harness's own session. How that continuity works is not uniform, so each harness declares what it can do rather than give'r assuming:
+
+| Harness | Headless | Continuity | Branches instead of continuing? |
+|---|---|---|---|
+| `pi` | `pi -p` | `--fork <id>` | yes |
+| `claude` | `claude -p` | `--resume <id> --fork-session` | yes, opt-in |
+| `codex` | `codex exec` | `codex exec resume <id>` | **no** |
+
+Branching leaves the parent session untouched, so re-running a step can't corrupt the one it came from. codex's headless mode has no branching variant — it resumes in place — so anything that replays work has to read `forks_on_resume` rather than assume every harness behaves like pi.
 
 ## Models
 

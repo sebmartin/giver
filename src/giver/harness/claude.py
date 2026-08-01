@@ -30,6 +30,9 @@ class ClaudeHarness:
 
     _VENDORS = frozenset({"anthropic"})
 
+    # `--resume <id> --fork-session` branches; the flag is opt-in.
+    forks_on_resume = True
+
     def serves(self, vendor: str) -> bool:
         return vendor in self._VENDORS
 

@@ -43,6 +43,11 @@ class Harness(Protocol):
     repl_cmd: tuple[str, ...]  # interactive launch argv — data, not a method
     install: str  # shell command that puts it in an image; one generated RUN line
 
+    # Can it branch a session instead of continuing it in place? Forking leaves
+    # the parent untouched, which is what makes replaying a step idempotent.
+    # Not universal — declare it rather than assume it.
+    forks_on_resume: bool
+
     def serves(self, vendor: str) -> bool: ...
 
     async def run(self, steps: list[AgentStep], log: logging.Logger) -> int: ...
@@ -103,7 +108,13 @@ async def drain_stderr(proc: asyncio.subprocess.Process, log: logging.Logger) ->
 
 
 from giver.harness.claude import ClaudeHarness  # noqa: E402
+from giver.harness.codex import CodexHarness  # noqa: E402
 from giver.harness.pi import PiHarness  # noqa: E402
 
-HARNESSES: tuple[Harness, ...] = (ClaudeHarness(), PiHarness())
-DEFAULT_HARNESS: Harness = HARNESSES[-1]
+HARNESSES: tuple[Harness, ...] = (ClaudeHarness(), CodexHarness(), PiHarness())
+
+# pi is the batteries-included path: it works in its default configuration, and
+# serves any vendor by API key. Named rather than derived from position in the
+# tuple, so it reads as a choice and can become configuration later.
+DEFAULT_HARNESS_NAME = "pi"
+DEFAULT_HARNESS: Harness = next(h for h in HARNESSES if h.name == DEFAULT_HARNESS_NAME)

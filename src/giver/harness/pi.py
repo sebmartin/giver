@@ -22,6 +22,9 @@ class PiHarness:
     repl_cmd = ("pi",)
     install = "npm install -g --ignore-scripts @earendil-works/pi-coding-agent"
 
+    # `--fork <id>` branches rather than continuing in place.
+    forks_on_resume = True
+
     def serves(self, vendor: str) -> bool:
         return True  # the general-purpose harness; anything unclaimed lands here
 

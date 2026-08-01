@@ -16,8 +16,10 @@ uv run pytest -v     # verbose
 ## Architecture rules
 
 - **The kernel runs inside Docker.** The CLI runs on the host, invokes `docker run`, and streams output back. Do not add interactive or host-signaling logic to the kernel.
-- **Pi/LLM knowledge is contained in the agent node.** `AgentNode` compiles a `prompt` into a `pi` command; the execution core (scheduler, subprocess, logging) and every other node stay Pi-ignorant — they only see processes: command in, exit code out. Pi's JSONL output streams to the node log like any stdout; agents write interesting results to files themselves.
-- **Every node compiles to a bash command.** Each node type carries or computes its own `command` (bash carries it; agent derives it from the prompt). The execution core runs the command and never branches on node type.
+- **Agent-CLI knowledge lives in `giver/harness/`.** One class per harness holds everything about that program — how to invoke it headless, how to parse its event stream, what infrastructure it needs, how it gets into an image. `AgentNode` delegates to it and knows nothing else; the execution core (scheduler, logging) and every other node stay harness-ignorant. The harness package depends on neither `cli` nor `kernel`, and both read it.
+- **A harness states what it needs, never where it lands.** `~/.pi/agent`, not `/root/.pi/agent`. Deriving Docker words — volume names, container paths, `-v`/`-e`/`-p` — is the CLI's job, because a local no-container mode is planned.
+- **`run` is a contract, not a spawn.** "Execute these steps, stream to the log, return status." Both shipped harnesses shell out, but nothing in the interface may assume a subprocess — an in-process harness has to stay buildable.
+- **Bash nodes carry their own command.** The execution core runs what a node gives it and never branches on node type.
 - **No hardcoded workflows.** Workflows are user-provided YAML. give'r ships none.
 - **No `human_gate` node type.** Workflows run to completion unassisted. Human checkpoints happen between `giver run` invocations on the host, not inside give'r.
 - **Idempotency by artifact existence.** A node is skipped on re-run if its output artifact already exists. Do not hash agent outputs.

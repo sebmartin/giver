@@ -1,7 +1,15 @@
 import pytest
 from unittest.mock import MagicMock, patch
 
-from giver.cli import _PROJECT_ROOT, _container_name, _ensure_image, cancel, run, shell
+from giver.cli import (
+    _PROJECT_ROOT,
+    _container_name,
+    _ensure_image,
+    cancel,
+    chat,
+    run,
+    shell,
+)
 
 
 def test_container_name_includes_stem():
@@ -92,7 +100,6 @@ def test_run_starts_detached_named_container(tmp_path):
     assert "-d" in start_cmd
     assert f"{wf.resolve()}:/workflow.yaml:ro" in start_cmd
     assert f"{runs_dir}:/runs" in start_cmd
-    assert "ANTHROPIC_API_KEY" in start_cmd
     assert "giver:latest" in start_cmd
 
 
@@ -149,7 +156,10 @@ def test_run_writes_runs_log(tmp_path):
     assert "exit 0" in text
 
 
-def test_run_mounts_harness_credential_volumes_read_only(tmp_path):
+def test_run_mounts_harness_credential_volumes_writable(tmp_path):
+    """Writable, not read-only: the harnesses write session transcripts and
+    refreshed tokens into these directories during a run, so a read-only mount
+    breaks multi-step nodes, resume, and unattended auth alike."""
     wf = tmp_path / "workflow.yaml"
     wf.write_text("name: test\nnodes: []")
 
@@ -158,8 +168,23 @@ def test_run_mounts_harness_credential_volumes_read_only(tmp_path):
         run(wf, runs_dir=tmp_path / "runs")
 
     start_cmd = _docker_calls(mock)[1]
-    assert "giver-pi-creds:/root/.pi/agent:ro" in start_cmd
-    assert "giver-claude-creds:/root/.claude:ro" in start_cmd
+    assert "giver-pi-creds:/root/.pi/agent" in start_cmd
+    assert "giver-claude-creds:/root/.claude" in start_cmd
+    assert not any(c.endswith("-creds:/root/.pi/agent:ro") for c in start_cmd)
+
+
+def test_run_forwards_no_credentials_from_the_host_environment(tmp_path):
+    """give'r's credentials exist only via a login run inside its own
+    environment — nothing is read implicitly from the host."""
+    wf = tmp_path / "workflow.yaml"
+    wf.write_text("name: test\nnodes: []")
+
+    with patch("giver.cli.subprocess.run") as mock:
+        mock.side_effect = _mock_side_effects()
+        run(wf, runs_dir=tmp_path / "runs")
+
+    start_cmd = _docker_calls(mock)[1]
+    assert "-e" not in start_cmd
 
 
 # ── shell ─────────────────────────────────────────────────────────────────────
@@ -197,6 +222,24 @@ def test_shell_no_harness_is_bare_bash():
 def test_shell_unknown_harness_returns_1():
     with patch("giver.cli.subprocess.run", return_value=MagicMock(returncode=0)):
         assert shell("unknown") == 1
+
+
+# ── chat ──────────────────────────────────────────────────────────────────────
+
+
+def test_chat_launches_the_harness_repl_with_the_same_provisioning():
+    with patch("giver.cli.subprocess.run", return_value=MagicMock(returncode=0)) as mock:
+        chat("pi")
+
+    cmd = _docker_calls(mock)[1]
+    assert "53692:53692" in cmd  # same declared infra as `shell pi`
+    assert "giver-pi-creds:/root/.pi/agent" in cmd
+    assert cmd[-3:] == ["--entrypoint", "pi", "giver:latest"]
+
+
+def test_chat_unknown_harness_returns_1():
+    with patch("giver.cli.subprocess.run", return_value=MagicMock(returncode=0)):
+        assert chat("unknown") == 1
 
 
 # ── cancel ────────────────────────────────────────────────────────────────────

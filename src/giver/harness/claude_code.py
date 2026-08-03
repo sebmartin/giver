@@ -2,10 +2,11 @@ import asyncio
 import json
 import logging
 
-from giver.harness import AgentStep, drain_stderr
+from giver.harness.process import drain_stderr
+from giver.harness.protocol import AgentStep
 
 
-class ClaudeHarness:
+class ClaudeCodeHarness:
     """Anthropic's own tooling, CLI form.
 
     Same one-shot-per-step shape as pi, with a different flag dialect:
@@ -18,7 +19,7 @@ class ClaudeHarness:
     can't reach".
     """
 
-    name = "claude"
+    name = "claude-code"
     state_path = "~/.claude"
     # Empty until an interactive `giver shell claude` login is observed. Unlike
     # pi, nothing in claude's surface suggests a local OAuth callback server —

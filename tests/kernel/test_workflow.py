@@ -185,12 +185,12 @@ def test_defaults_cascade_to_every_step(workflows_dir):
     """`model` reaches the step, `harness` stops at the node, nearest wins —
     and bare names are qualified at load so no harness ever sees one."""
     wf = Workflow.from_file(workflows_dir / "defaults_cascade.yaml")
-    resolved = {n.name: (n.harness, [s.model for s in n.steps]) for n in wf.nodes}
+    resolved = {n.name: (n.harness_name, [s.model for s in n.steps]) for n in wf.nodes}
 
     assert resolved == {
-        "inherits-everything": ("claude", ["anthropic/claude-haiku-4-5"]),
+        "inherits-everything": ("claude-code", ["anthropic/claude-haiku-4-5"]),
         "overrides-model-at-node": (
-            "claude",
+            "claude-code",
             ["anthropic/claude-opus-4-5", "anthropic/claude-haiku-4-5"],
         ),
         "overrides-harness-at-node": ("pi", ["anthropic/claude-haiku-4-5"]),
@@ -199,7 +199,7 @@ def test_defaults_cascade_to_every_step(workflows_dir):
 
 def test_workflow_without_defaults_still_loads(workflows_dir):
     wf = Workflow.from_file(workflows_dir / "single_node_agent_with_model.yaml")
-    assert wf.defaults.model is None and wf.defaults.harness is None
+    assert wf.defaults.model is None and wf.defaults.harness_name is None
 
 
 def test_missing_model_fails_at_load_naming_the_step():

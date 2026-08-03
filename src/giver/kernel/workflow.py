@@ -4,8 +4,9 @@ import time
 from pathlib import Path
 
 import yaml
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from giver.harness import HarnessName
 from giver.kernel.logging import Logger
 from giver.kernel.nodes import Node, NodeField
 
@@ -18,10 +19,10 @@ class Defaults(BaseModel):
     them.
     """
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     model: str | None = None
-    harness: str | None = None
+    harness_name: HarnessName = Field(default=None, alias="harness")
 
 
 class Workflow(BaseModel):

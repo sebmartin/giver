@@ -37,7 +37,7 @@ giver run workflow.yaml
 
 ## Harnesses
 
-A **harness** is a coding-agent CLI that give'r drives — `pi`, `claude` or `codex`. give'r orchestrates; the harness does the agent work. One class describes each one: where it keeps credentials and sessions, what environment and ports it needs, how it gets installed, its REPL command, which vendors it can serve, and how to run a node's steps.
+A **harness** is a coding-agent CLI that give'r drives — `pi`, `claude-code` or `codex`. give'r orchestrates; the harness does the agent work. One class describes each one: where it keeps credentials and sessions, what environment and ports it needs, how it gets installed, its REPL command, which vendors it can serve, and how to run a node's steps.
 
 Nothing in give'r branches on which harness is running. Anything harness-specific is expressed through a mechanism every harness has, so adding one is a single class.
 
@@ -45,19 +45,19 @@ Nothing in give'r branches on which harness is running. Anything harness-specifi
 
 ```yaml
 defaults:
-  harness: claude              # or per-node
+  harness: claude-code              # or per-node
   model: anthropic/claude-opus-4-5
 ```
 
-Harnesses are driven as one-shot invocations per step, with continuity threaded through the harness's own session. How that continuity works is not uniform, so each harness declares what it can do rather than give'r assuming:
+Harnesses are driven as one-shot invocations per step, with continuity threaded through the harness's own session. That continuity is not uniform, so each harness declares what it can do rather than give'r assuming:
 
 | Harness | Headless | Continuity | Branches instead of continuing? |
 |---|---|---|---|
 | `pi` | `pi -p` | `--fork <id>` | yes |
-| `claude` | `claude -p` | `--resume <id> --fork-session` | yes, opt-in |
+| `claude-code` | `claude -p` | `--resume <id> --fork-session` | yes, opt-in |
 | `codex` | `codex exec` | `codex exec resume <id>` | **no** |
 
-Branching leaves the parent session untouched, so re-running a step can't corrupt the one it came from. codex's headless mode has no branching variant — it resumes in place — so anything that replays work has to read `forks_on_resume` rather than assume every harness behaves like pi.
+Branching leaves the parent session untouched, so re-running a step can't corrupt the one it came from. codex's headless mode has no branching variant — it resumes in place — so anything that replays work reads `forks_on_resume` rather than assuming every harness behaves like pi.
 
 ## Models
 
@@ -75,13 +75,15 @@ Which harness runs a step is decided by the workflow, not by the model: `harness
 
 ## Credentials
 
-give'r stores no credentials and defines no credential format. Each harness reads and writes its own, in its own location, on a Docker volume that persists between runs. Nothing is read from your host environment — give'r's logins are give'r's.
+give'r stores no credentials and defines no credential format. Each harness reads and writes its own, in its own location, on a Docker volume that persists between runs. A run mounts the volumes for the harnesses that workflow actually names, and nothing else.
+
+Your host's credentials are never read: give'r's logins live only inside give'r's own environment.
 
 Log in once per harness:
 
 ```bash
 giver shell pi        # drops you into bash with pi's volume mounted; run its login
-giver chat claude     # or straight into the harness's own REPL
+giver chat claude-code     # or straight into the harness's own REPL
 ```
 
 Missing credentials surface as that harness's own "not logged in" error on first use, with its own remedy.
@@ -104,7 +106,7 @@ giver chat <harness>                 # the harness's own REPL
 ```yaml
 defaults:
   model: anthropic/claude-haiku-4-5
-  harness: claude
+  harness: claude-code
 ```
 
 `model` cascades to every step; `harness` cascades to every node. Nearest declaration wins, so a node overrides the defaults and a step overrides its node.
@@ -116,7 +118,7 @@ defaults:
 ```yaml
 - name: plan
   type: agent
-  harness: claude              # optional; omitted means pi
+  harness: claude-code              # optional; omitted means pi
   model: anthropic/claude-haiku-4-5
   output: plan.md              # skip this node if the file already exists
   depends_on: [load-context]

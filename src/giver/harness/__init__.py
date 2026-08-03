@@ -1,120 +1,50 @@
-"""Harnesses: the coding-agent programs give'r drives.
+"""The layer between give'r and whatever agent harness you want to run.
 
-One description per harness, read by both layers — the host CLI provisions a
-runtime from the declared infrastructure, the kernel invokes behaviour. A
-harness states `~/.pi/agent`, never `/root/...`; expanding that into a container
-path is the consumer's job.
+give'r orchestrates workflows; a harness does the agent work. Keeping the two
+apart is what stops give'r from being welded to any one vendor's CLI — first
+party or third. A harness is described here in terms give'r can act on, and the
+rest of the codebase talks to that description rather than to pi or claude-code
+directly. Adding a harness is adding a class; nothing else has to learn about
+it.
 
-`run` is a contract — "execute these steps, stream to the log, return status" —
-not "spawn this command". Both harnesses shipped here shell out, but an
-in-process one stays buildable.
+Split by concern so the harness classes can import what they need without
+importing each other:
+
+- `protocol`  what a harness has to provide, and the step it is handed
+- `vendors`   turning `claude-opus-4-5` into `anthropic/claude-opus-4-5`
+- `process`   subprocess plumbing shared by the CLI-backed harnesses
+- `registry`  which harnesses exist, and looking one up by name
 """
 
-import asyncio
-import logging
-from typing import Protocol
+from giver.harness.claude_code import ClaudeCodeHarness
+from giver.harness.codex import CodexHarness
+from giver.harness.pi import PiHarness
+from giver.harness.process import drain_stderr
+from giver.harness.protocol import AgentStep, Harness
+from giver.harness.registry import (
+    DEFAULT_HARNESS,
+    DEFAULT_HARNESS_NAME,
+    HARNESS_NAMES,
+    HARNESSES,
+    HarnessName,
+    harness_by_name,
+)
+from giver.harness.vendors import VENDOR_PREFIXES, resolve_model, vendor_of
 
-from pydantic import BaseModel, ConfigDict
-
-
-class Vendor(BaseModel):
-    """A credential namespace and routing pivot. A local ollama endpoint is a
-    vendor too, possibly credential-less."""
-
-    name: str
-
-
-class AgentStep(BaseModel):
-    # extra="forbid" so a `harness:` key on a step is a load error rather than a
-    # silently dropped field — a harness cannot vary per step (the steps of one
-    # node share a session, and session ids belong to the harness that issued
-    # them).
-    model_config = ConfigDict(extra="forbid")
-
-    prompt: str
-    model: str | None = None
-
-
-class Harness(Protocol):
-    name: str
-    state_path: str  # where it keeps credentials and sessions; `~` stays
-    env: dict[str, str]
-    ports: tuple[str, ...]
-    repl_cmd: tuple[str, ...]  # interactive launch argv — data, not a method
-    install: str  # shell command that puts it in an image; one generated RUN line
-
-    # Can it branch a session instead of continuing it in place? Forking leaves
-    # the parent untouched, which is what makes replaying a step idempotent.
-    # Not universal — declare it rather than assume it.
-    forks_on_resume: bool
-
-    def serves(self, vendor: str) -> bool: ...
-
-    async def run(self, steps: list[AgentStep], log: logging.Logger) -> int: ...
-
-
-# Brand prefixes, not model names: vendors ship new models far more often than
-# they ship a new brand. A name no prefix claims is ambiguous on purpose —
-# `qwen-2.5-coder` is served by ollama, together and fireworks with different
-# credentials and, locally, no cost at all.
-VENDOR_PREFIXES = {
-    "claude": "anthropic",
-    "gpt": "openai",
-    "o1": "openai",
-    "o3": "openai",
-    "o4": "openai",
-    "gemini": "google",
-}
-
-
-def resolve_model(value: str) -> str:
-    """Canonicalize a model to `vendor/model`.
-
-    A qualified value passes through unvalidated — vendors add models faster
-    than give'r updates, and the harness itself rejects a bad id with a real
-    error. A bare name resolves by brand prefix, or raises.
-    """
-    if "/" in value:
-        return value
-    for prefix, vendor in VENDOR_PREFIXES.items():
-        if value.startswith(prefix):
-            return f"{vendor}/{value}"
-    raise ValueError(
-        f"cannot infer a vendor for model {value!r} — write it as vendor/{value}"
-    )
-
-
-def vendor_of(model: str) -> str:
-    return model.split("/", 1)[0]
-
-
-def harness_by_name(name: str | None) -> Harness:
-    """The harness a workflow named, or the general-purpose one."""
-    if name is None:
-        return DEFAULT_HARNESS
-    for harness in HARNESSES:
-        if harness.name == name:
-            return harness
-    known = ", ".join(h.name for h in HARNESSES)
-    raise ValueError(f"unknown harness {name!r}. choices: {known}")
-
-
-async def drain_stderr(proc: asyncio.subprocess.Process, log: logging.Logger) -> None:
-    """Read stderr concurrently with stdout, or a child that fills the stderr
-    pipe blocks forever while the parent waits on stdout."""
-    assert proc.stderr is not None
-    async for line in proc.stderr:
-        log.debug(line.decode().rstrip())
-
-
-from giver.harness.claude import ClaudeHarness  # noqa: E402
-from giver.harness.codex import CodexHarness  # noqa: E402
-from giver.harness.pi import PiHarness  # noqa: E402
-
-HARNESSES: tuple[Harness, ...] = (ClaudeHarness(), CodexHarness(), PiHarness())
-
-# pi is the batteries-included path: it works in its default configuration, and
-# serves any vendor by API key. Named rather than derived from position in the
-# tuple, so it reads as a choice and can become configuration later.
-DEFAULT_HARNESS_NAME = "pi"
-DEFAULT_HARNESS: Harness = next(h for h in HARNESSES if h.name == DEFAULT_HARNESS_NAME)
+__all__ = [
+    "DEFAULT_HARNESS",
+    "DEFAULT_HARNESS_NAME",
+    "HARNESSES",
+    "HARNESS_NAMES",
+    "VENDOR_PREFIXES",
+    "AgentStep",
+    "ClaudeCodeHarness",
+    "CodexHarness",
+    "Harness",
+    "HarnessName",
+    "PiHarness",
+    "drain_stderr",
+    "harness_by_name",
+    "resolve_model",
+    "vendor_of",
+]

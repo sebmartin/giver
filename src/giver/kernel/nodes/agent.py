@@ -2,7 +2,7 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
 from giver.harness import (
     DEFAULT_HARNESS_NAME,
@@ -20,10 +20,12 @@ __all__ = ["AgentNode", "AgentStep"]
 
 
 class AgentNode(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
     type: Literal["agent"]
     name: str
     depends_on: list[str] = []
-    harness: HarnessName = None
+    harness_name: HarnessName = Field(default=None, alias="harness")
     model: str | None = None
     output: str | None = None
     steps: list[AgentStep]
@@ -36,7 +38,9 @@ class AgentNode(BaseModel):
         """
         # Resolve to a concrete name at load time, so nothing downstream has to
         # re-derive what "unset" means.
-        self.harness = self.harness or defaults.harness or DEFAULT_HARNESS_NAME
+        self.harness_name = (
+            self.harness_name or defaults.harness_name or DEFAULT_HARNESS_NAME
+        )
         node_model = self.model or defaults.model
         for step in self.steps:
             model = step.model or node_model
@@ -54,7 +58,7 @@ class AgentNode(BaseModel):
                 "Cross-vendor collaboration happens between nodes — split the steps "
                 "into separate nodes and pass artifacts."
             )
-        harness = harness_by_name(self.harness)
+        harness = harness_by_name(self.harness_name)
         vendor = vendors.pop()
         if not harness.serves(vendor):
             raise ValueError(
@@ -62,12 +66,9 @@ class AgentNode(BaseModel):
                 f"vendor {vendor!r}"
             )
 
-    def harness_name(self) -> str | None:
-        return self.harness
-
     def should_skip(self) -> bool:
         return self.output is not None and Path(self.output).exists()
 
     async def run(self) -> int:
         log = logging.getLogger(self.name)
-        return await harness_by_name(self.harness).run(self.steps, log)
+        return await harness_by_name(self.harness_name).run(self.steps, log)

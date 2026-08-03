@@ -43,7 +43,7 @@ def test_bare_model_names_are_qualified():
 def test_inherits_harness_from_defaults():
     n = node(AgentStep(prompt="a", model="anthropic/claude-opus-4-5"))
     n.apply_defaults(Defaults(harness="claude-code"))
-    assert n.harness == "claude-code"
+    assert n.harness_name == "claude-code"
 
 
 def test_unset_harness_resolves_to_the_default():
@@ -51,7 +51,7 @@ def test_unset_harness_resolves_to_the_default():
     re-derive what unset means."""
     n = node(AgentStep(prompt="a", model="openai/gpt-5.5"))
     n.apply_defaults(Defaults())
-    assert n.harness == "pi"
+    assert n.harness_name == "pi"
 
 
 def test_an_unknown_harness_fails_when_the_node_is_built():

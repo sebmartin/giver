@@ -20,9 +20,6 @@ class BashNode(BaseModel):
         """Nothing to resolve yet — `defaults:` currently carries only agent
         concerns. `timeout` and `stall` will apply here too."""
 
-    def harness_name(self) -> str | None:
-        return None  # runs a command directly; no harness involved
-
     def should_skip(self) -> bool:
         return self.output is not None and Path(self.output).exists()
 

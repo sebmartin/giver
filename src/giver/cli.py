@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from giver.harness import HARNESS_NAMES, Harness, harness_by_name
+from giver.kernel.nodes.agent import AgentNode
 from giver.kernel.workflow import Workflow
 
 
@@ -45,7 +46,7 @@ def _container_path(harness: Harness) -> str:
     return "/root/" + harness.state_path.removeprefix("~/")
 
 
-def _harness_args(harness: Harness, publish_ports: bool) -> list[str]:
+def _harness_args(harness: Harness, interactive: bool) -> list[str]:
     """Docker arguments a harness needs: its environment, its credential and
     session volume, and — only when someone will interact with it — the ports
     its login flow listens on.
@@ -56,7 +57,7 @@ def _harness_args(harness: Harness, publish_ports: bool) -> list[str]:
     args = []
     for key, value in harness.env.items():
         args += ["-e", f"{key}={value}"]
-    if publish_ports:
+    if interactive:
         for port in harness.ports:
             args += ["-p", port]
     return args + ["-v", f"{_volume(harness)}:{_container_path(harness)}"]
@@ -70,8 +71,8 @@ def _harnesses_for(workflow_abs: Path) -> list[Harness]:
     kernel will run inside it.
     """
     workflow = Workflow.from_file(workflow_abs)
-    named = {node.harness_name() for node in workflow.nodes} - {None}
-    return [harness_by_name(name) for name in sorted(named, key=lambda n: n or "")]
+    named = {n.harness_name for n in workflow.nodes if isinstance(n, AgentNode)}
+    return [harness_by_name(name) for name in sorted(named)]
 
 
 def _run_container(workflow_abs: Path, runs_dir: Path, name: str) -> None:
@@ -81,10 +82,13 @@ def _run_container(workflow_abs: Path, runs_dir: Path, name: str) -> None:
         "-v", f"{workflow_abs}:/workflow.yaml:ro",
         "-v", f"{runs_dir}:/runs",
     ]
-    # Mount writable: harnesses write session transcripts as they work and
-    # rewrite credential files when a token refreshes.
+    # Only what this workflow uses: an agent that goes wrong, or gets talked
+    # into it, can read every credential in the container, so a pi workflow has
+    # no reason to be holding Claude Code's token. Mounted writable — harnesses
+    # write session transcripts as they work and rewrite credential files when a
+    # token refreshes.
     for harness in _harnesses_for(workflow_abs):
-        cmd += _harness_args(harness, publish_ports=False)
+        cmd += _harness_args(harness, interactive=False)
     cmd += ["giver:latest", "/workflow.yaml"]
     subprocess.run(cmd)
 
@@ -98,7 +102,7 @@ def _interactive(harness_name: str | None, entrypoint: list[str]) -> int:
         except ValueError as e:
             print(f"error: {e}", file=sys.stderr)
             return 1
-        cmd += _harness_args(harness, publish_ports=True)
+        cmd += _harness_args(harness, interactive=True)
     cmd += ["--entrypoint", *entrypoint, "giver:latest"]
     return subprocess.run(cmd).returncode
 

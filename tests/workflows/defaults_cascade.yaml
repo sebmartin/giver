@@ -1,0 +1,21 @@
+name: defaults-cascade
+defaults:
+  model: claude-haiku-4-5          # bare name — vendor inferred
+  harness: claude-code
+nodes:
+  - name: inherits-everything
+    type: agent
+    steps:
+      - prompt: "a"
+  - name: overrides-model-at-node
+    type: agent
+    model: anthropic/claude-opus-4-5
+    steps:
+      - prompt: "b"
+      - prompt: "c"
+        model: anthropic/claude-haiku-4-5   # step wins over node
+  - name: overrides-harness-at-node
+    type: agent
+    harness: pi
+    steps:
+      - prompt: "d"

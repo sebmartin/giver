@@ -4,19 +4,43 @@ import time
 from pathlib import Path
 
 import yaml
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from giver.harness import HarnessName
 from giver.kernel.logging import Logger
 from giver.kernel.nodes import Node, NodeField
 
 
+class Defaults(BaseModel):
+    """Workflow-level settings a node inherits unless it says otherwise.
+
+    `model` reaches the step; `harness` stops at the node — the steps of one
+    node share a session, and session ids belong to the harness that issued
+    them.
+    """
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    model: str | None = None
+    harness_name: HarnessName = Field(default=None, alias="harness")
+
+
 class Workflow(BaseModel):
     name: str
+    defaults: Defaults = Defaults()
     nodes: list[NodeField]
 
     @classmethod
     def from_file(cls, path: Path) -> "Workflow":
         return cls.model_validate(yaml.safe_load(path.read_text()))
+
+    @model_validator(mode="after")
+    def _apply_defaults(self) -> "Workflow":
+        # Before the DAG check, so a workflow with both problems reports the
+        # cheaper one first.
+        for node in self.nodes:
+            node.apply_defaults(self.defaults)
+        return self
 
     @model_validator(mode="after")
     def _validate_dag(self) -> "Workflow":

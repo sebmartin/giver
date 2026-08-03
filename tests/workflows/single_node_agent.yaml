@@ -1,4 +1,6 @@
 name: single-node-agent
+defaults:
+  model: anthropic/claude-haiku-4-5
 nodes:
   - name: greet
     type: agent

@@ -1,7 +1,15 @@
 import pytest
 from unittest.mock import MagicMock, patch
 
-from giver.cli import _PROJECT_ROOT, _container_name, _ensure_image, cancel, run, shell
+from giver.cli import (
+    _PROJECT_ROOT,
+    _container_name,
+    _ensure_image,
+    cancel,
+    chat,
+    run,
+    shell,
+)
 
 
 def test_container_name_includes_stem():
@@ -92,7 +100,6 @@ def test_run_starts_detached_named_container(tmp_path):
     assert "-d" in start_cmd
     assert f"{wf.resolve()}:/workflow.yaml:ro" in start_cmd
     assert f"{runs_dir}:/runs" in start_cmd
-    assert "ANTHROPIC_API_KEY" in start_cmd
     assert "giver:latest" in start_cmd
 
 
@@ -149,17 +156,71 @@ def test_run_writes_runs_log(tmp_path):
     assert "exit 0" in text
 
 
-def test_run_mounts_harness_credential_volumes_read_only(tmp_path):
+def _agent_workflow(tmp_path, *harnesses: str):
+    """A workflow with one agent node per named harness."""
+    nodes = "\n".join(
+        f"  - name: n{i}\n"
+        f"    type: agent\n"
+        f"    harness: {h}\n"
+        f"    model: {'anthropic/claude-haiku-4-5' if h == 'claude-code' else 'openai/gpt-5.5'}\n"
+        f"    steps:\n"
+        f"      - prompt: go"
+        for i, h in enumerate(harnesses)
+    )
     wf = tmp_path / "workflow.yaml"
-    wf.write_text("name: test\nnodes: []")
+    wf.write_text(f"name: test\nnodes:\n{nodes}\n")
+    return wf
 
+
+def _start_cmd(wf, tmp_path):
     with patch("giver.cli.subprocess.run") as mock:
         mock.side_effect = _mock_side_effects()
         run(wf, runs_dir=tmp_path / "runs")
+    return _docker_calls(mock)[1]
 
-    start_cmd = _docker_calls(mock)[1]
-    assert "giver-pi-creds:/root/.pi/agent:ro" in start_cmd
-    assert "giver-claude-creds:/root/.claude:ro" in start_cmd
+
+def test_run_mounts_harness_credential_volumes_writable(tmp_path):
+    """Writable, not read-only: the harnesses write session transcripts and
+    refreshed tokens into these directories during a run, so a read-only mount
+    breaks multi-step nodes, resume, and unattended auth alike."""
+    cmd = _start_cmd(_agent_workflow(tmp_path, "pi", "claude-code"), tmp_path)
+
+    assert "giver-pi-creds:/root/.pi/agent" in cmd
+    assert "giver-claude-code-creds:/root/.claude" in cmd
+    assert not any(c.endswith(":ro") and "creds" in c for c in cmd)
+
+
+def test_run_mounts_only_the_harnesses_the_workflow_uses(tmp_path):
+    cmd = _start_cmd(_agent_workflow(tmp_path, "pi"), tmp_path)
+
+    assert "giver-pi-creds:/root/.pi/agent" in cmd
+    assert not any("claude-code-creds" in c for c in cmd)
+
+
+def test_run_mounts_nothing_for_a_workflow_with_no_agent_nodes(tmp_path):
+    wf = tmp_path / "workflow.yaml"
+    wf.write_text("name: test\nnodes:\n  - name: b\n    type: bash\n    command: 'true'\n")
+
+    cmd = _start_cmd(wf, tmp_path)
+    assert not any("creds" in c for c in cmd)
+
+
+def test_run_applies_harness_environment_but_publishes_no_ports(tmp_path):
+    """A run needs pi's environment, but nothing is there to complete an OAuth
+    callback — logging in happens beforehand via `giver shell`."""
+    cmd = _start_cmd(_agent_workflow(tmp_path, "pi"), tmp_path)
+
+    assert "PI_OAUTH_CALLBACK_HOST=0.0.0.0" in cmd
+    assert "-p" not in cmd
+
+
+def test_run_forwards_no_credentials_from_the_host_environment(tmp_path):
+    """give'r's credentials come from a login inside its own environment; the
+    host's are never read implicitly."""
+    cmd = _start_cmd(_agent_workflow(tmp_path, "pi", "claude-code"), tmp_path)
+
+    passed = {c for i, c in enumerate(cmd) if i and cmd[i - 1] == "-e"}
+    assert passed == {"PI_OAUTH_CALLBACK_HOST=0.0.0.0"}
 
 
 # ── shell ─────────────────────────────────────────────────────────────────────
@@ -179,10 +240,10 @@ def test_shell_pi_drops_into_bash_with_pi_volume():
 
 def test_shell_claude_drops_into_bash_with_claude_volume():
     with patch("giver.cli.subprocess.run", return_value=MagicMock(returncode=0)) as mock:
-        shell("claude")
+        shell("claude-code")
 
     cmd = _docker_calls(mock)[1]
-    assert "giver-claude-creds:/root/.claude" in cmd
+    assert "giver-claude-code-creds:/root/.claude" in cmd
     assert cmd[-3:] == ["--entrypoint", "bash", "giver:latest"]
 
 
@@ -197,6 +258,24 @@ def test_shell_no_harness_is_bare_bash():
 def test_shell_unknown_harness_returns_1():
     with patch("giver.cli.subprocess.run", return_value=MagicMock(returncode=0)):
         assert shell("unknown") == 1
+
+
+# ── chat ──────────────────────────────────────────────────────────────────────
+
+
+def test_chat_launches_the_harness_repl_with_the_same_provisioning():
+    with patch("giver.cli.subprocess.run", return_value=MagicMock(returncode=0)) as mock:
+        chat("pi")
+
+    cmd = _docker_calls(mock)[1]
+    assert "53692:53692" in cmd  # same declared infra as `shell pi`
+    assert "giver-pi-creds:/root/.pi/agent" in cmd
+    assert cmd[-3:] == ["--entrypoint", "pi", "giver:latest"]
+
+
+def test_chat_unknown_harness_returns_1():
+    with patch("giver.cli.subprocess.run", return_value=MagicMock(returncode=0)):
+        assert chat("unknown") == 1
 
 
 # ── cancel ────────────────────────────────────────────────────────────────────

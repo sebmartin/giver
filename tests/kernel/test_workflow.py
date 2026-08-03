@@ -176,3 +176,45 @@ async def test_skipped_node_does_not_block_dependents(tmp_path):
 async def test_run_returns_true_when_all_nodes_succeed(tmp_path, workflows_dir):
     wf = Workflow.from_file(workflows_dir / "single_node_bash.yaml")
     assert await wf.run(tmp_path) is True
+
+
+# ── defaults cascade ──────────────────────────────────────────────────────────
+
+
+def test_defaults_cascade_to_every_step(workflows_dir):
+    """`model` reaches the step, `harness` stops at the node, nearest wins —
+    and bare names are qualified at load so no harness ever sees one."""
+    wf = Workflow.from_file(workflows_dir / "defaults_cascade.yaml")
+    resolved = {n.name: (n.harness_name, [s.model for s in n.steps]) for n in wf.nodes}
+
+    assert resolved == {
+        "inherits-everything": ("claude-code", ["anthropic/claude-haiku-4-5"]),
+        "overrides-model-at-node": (
+            "claude-code",
+            ["anthropic/claude-opus-4-5", "anthropic/claude-haiku-4-5"],
+        ),
+        "overrides-harness-at-node": ("pi", ["anthropic/claude-haiku-4-5"]),
+    }
+
+
+def test_workflow_without_defaults_still_loads(workflows_dir):
+    wf = Workflow.from_file(workflows_dir / "single_node_agent_with_model.yaml")
+    assert wf.defaults.model is None and wf.defaults.harness_name is None
+
+
+def test_missing_model_fails_at_load_naming_the_step():
+    with pytest.raises(ValidationError, match="no model for step"):
+        Workflow.model_validate(
+            {"name": "t", "nodes": [
+                {"name": "n", "type": "agent", "steps": [{"prompt": "do the thing"}]}
+            ]}
+        )
+
+
+def test_ambiguous_bare_model_fails_at_load():
+    with pytest.raises(ValidationError, match="write it as vendor/qwen-2.5-coder"):
+        Workflow.model_validate(
+            {"name": "t", "defaults": {"model": "qwen-2.5-coder"}, "nodes": [
+                {"name": "n", "type": "agent", "steps": [{"prompt": "a"}]}
+            ]}
+        )

@@ -2,9 +2,12 @@ import argparse
 import subprocess
 import sys
 import time
-from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+
+from giver.harness import HARNESS_NAMES, Harness, harness_by_name
+from giver.kernel.nodes.agent import AgentNode
+from giver.kernel.workflow import Workflow
 
 
 def _container_name(workflow_stem: str) -> str:
@@ -32,66 +35,92 @@ def _ensure_image() -> None:
         sys.exit(1)
 
 
-@dataclass(frozen=True)
-class Harness:
-    """A coding-agent CLI baked into the image, with an isolated credential store.
+# A harness describes itself in its own terms — pi says `~/.pi/agent`. These
+# translate that into the Docker names for a root container, which is knowledge
+# the host has and the harness shouldn't.
+def _volume(harness: Harness) -> str:
+    return f"giver-{harness.name}-creds"
 
-    Credentials live in a Docker named volume, never on the host — the host need
-    not have the harness installed. `giver shell <name>` logs in (volume mounted
-    writable); `giver run` mounts the same volume read-only so the kernel reuses
-    that login.
+
+def _container_path(harness: Harness) -> str:
+    return "/root/" + harness.state_path.removeprefix("~/")
+
+
+def _harness_args(harness: Harness, interactive: bool) -> list[str]:
+    """Docker arguments a harness needs: its environment, its credential and
+    session volume, and — only when someone will interact with it — the ports
+    its login flow listens on.
+
+    A run publishes no ports: logging in happens beforehand via `giver shell`,
+    and a headless step has nothing to answer an OAuth callback with.
     """
-    volume: str
-    cred_container: str
-    ports: tuple[str, ...] = ()
-    env: tuple[str, ...] = ()
+    args = []
+    for key, value in harness.env.items():
+        args += ["-e", f"{key}={value}"]
+    if interactive:
+        for port in harness.ports:
+            args += ["-p", port]
+    return args + ["-v", f"{_volume(harness)}:{_container_path(harness)}"]
 
 
-def _harnesses() -> dict[str, Harness]:
-    return {
-        "pi": Harness(
-            volume="giver-pi-creds",
-            cred_container="/root/.pi/agent",
-            ports=("53692:53692",),
-            env=("PI_OAUTH_CALLBACK_HOST=0.0.0.0",),
-        ),
-        "claude": Harness(
-            volume="giver-claude-creds",
-            cred_container="/root/.claude",
-        ),
-    }
+def _harnesses_for(workflow_abs: Path) -> list[Harness]:
+    """The harnesses a workflow's agent nodes actually name.
+
+    Parsing the workflow host-side means an unknown harness or an unresolvable
+    model is reported here, before a container exists, using the same code the
+    kernel will run inside it.
+    """
+    workflow = Workflow.from_file(workflow_abs)
+    named = {n.harness_name for n in workflow.nodes if isinstance(n, AgentNode)}
+    return [harness_by_name(name) for name in sorted(named)]
 
 
-def _start(workflow_abs: Path, runs_dir: Path, name: str) -> None:
+def _run_container(workflow_abs: Path, runs_dir: Path, name: str) -> None:
     cmd = [
         "docker", "run", "-d",
         "--name", name,
         "-v", f"{workflow_abs}:/workflow.yaml:ro",
         "-v", f"{runs_dir}:/runs",
-        "-e", "ANTHROPIC_API_KEY",
     ]
-    for h in _harnesses().values():
-        cmd += ["-v", f"{h.volume}:{h.cred_container}:ro"]
+    # Only what this workflow uses: an agent that goes wrong, or gets talked
+    # into it, can read every credential in the container, so a pi workflow has
+    # no reason to be holding Claude Code's token. Mounted writable — harnesses
+    # write session transcripts as they work and rewrite credential files when a
+    # token refreshes.
+    for harness in _harnesses_for(workflow_abs):
+        cmd += _harness_args(harness, interactive=False)
     cmd += ["giver:latest", "/workflow.yaml"]
     subprocess.run(cmd)
 
 
-def shell(harness: str | None = None) -> int:
+def _interactive(harness_name: str | None, entrypoint: list[str]) -> int:
     _ensure_image()
     cmd = ["docker", "run", "--rm", "-it"]
-    if harness is not None:
-        harnesses = _harnesses()
-        h = harnesses.get(harness)
-        if h is None:
-            print(f"error: unknown harness {harness!r}. choices: {', '.join(harnesses)}", file=sys.stderr)
+    if harness_name is not None:
+        try:
+            harness = harness_by_name(harness_name)
+        except ValueError as e:
+            print(f"error: {e}", file=sys.stderr)
             return 1
-        for p in h.ports:
-            cmd += ["-p", p]
-        for e in h.env:
-            cmd += ["-e", e]
-        cmd += ["-v", f"{h.volume}:{h.cred_container}"]
-    cmd += ["--entrypoint", "bash", "giver:latest"]
+        cmd += _harness_args(harness, interactive=True)
+    cmd += ["--entrypoint", *entrypoint, "giver:latest"]
     return subprocess.run(cmd).returncode
+
+
+def shell(harness: str | None = None) -> int:
+    """Bash inside the sandbox with a harness's credential volume mounted —
+    the manual first-pass auth path. Bare `giver shell` is a plain container."""
+    return _interactive(harness, ["bash"])
+
+
+def chat(harness: str) -> int:
+    """The harness's own REPL, same provisioning as `shell`."""
+    try:
+        repl_cmd = list(harness_by_name(harness).repl_cmd)
+    except ValueError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
+    return _interactive(harness, repl_cmd)
 
 
 def _stream(name: str) -> int:
@@ -110,7 +139,7 @@ def run(workflow_path: Path, runs_dir: Path | None = None, detach: bool = False)
     _log(runs_dir, f"start container={name} workflow={workflow_abs} at {datetime.now(timezone.utc).isoformat()}")
 
     _ensure_image()
-    _start(workflow_abs, runs_dir, name)
+    _run_container(workflow_abs, runs_dir, name)
 
     if detach:
         print(name)
@@ -145,9 +174,12 @@ def main() -> None:
     shell_p.add_argument(
         "harness",
         nargs="?",
-        choices=list(_harnesses()),
+        choices=HARNESS_NAMES,
         help="harness whose credentials to mount (omit for a bare container shell)",
     )
+
+    chat_p = sub.add_parser("chat", help="open a harness's own REPL in the giver container")
+    chat_p.add_argument("harness", choices=HARNESS_NAMES, help="harness to launch")
 
     args = parser.parse_args()
     if args.command == "run":
@@ -156,3 +188,5 @@ def main() -> None:
         sys.exit(cancel(args.name))
     elif args.command == "shell":
         sys.exit(shell(args.harness))
+    elif args.command == "chat":
+        sys.exit(chat(args.harness))

@@ -1,242 +1,138 @@
-import json
-import logging
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
+from pydantic import ValidationError
 
-from giver.kernel.nodes.agent import (
-    AgentNode,
-    AgentStep,
-    ClaudeRunner,
-    PiRunner,
-    _infer_provider,
-)
+from giver.harness import AgentStep
+from giver.kernel.nodes.agent import AgentNode
+from giver.kernel.workflow import Defaults, Workflow
 
 
-# ── helpers: PiRunner / subprocess ───────────────────────────────────────────
-
-class _AsyncLines:
-    """Async iterator over pre-encoded JSONL lines."""
-    def __init__(self, events: list[dict]):
-        self._lines = iter((json.dumps(e) + "\n").encode() for e in events)
-
-    def __aiter__(self): return self
-
-    async def __anext__(self) -> bytes:
-        try:
-            return next(self._lines)
-        except StopIteration:
-            raise StopAsyncIteration
+def node(*steps: AgentStep, **kwargs) -> AgentNode:
+    return AgentNode(type="agent", name="n", steps=list(steps), **kwargs)
 
 
-def _mock_proc(*event_batches: list[dict]) -> MagicMock:
-    """One event_batch per step; each batch ends with agent_end."""
-    all_events = [e for batch in event_batches for e in batch]
-    proc = MagicMock()
-    proc.stdin = MagicMock()
-    proc.stdin.write = MagicMock()
-    proc.stdin.drain = AsyncMock()
-    proc.stdin.close = MagicMock()
-    proc.stdout = _AsyncLines(all_events)
-    proc.stderr = _AsyncLines([])
-    proc.wait = AsyncMock(return_value=0)
-    return proc
+# ── resolving harness and model ───────────────────────────────────────────────
 
 
-_DONE = [{"type": "agent_end", "willRetry": False}]
-_TEXT = [
-    {"type": "message_update", "assistantMessageEvent": {"type": "text_delta", "delta": "hi"}},
-    {"type": "agent_end", "willRetry": False},
-]
+def test_inherits_model_from_defaults():
+    n = node(AgentStep(prompt="a"))
+    n.apply_defaults(Defaults(model="anthropic/claude-haiku-4-5"))
+    assert [s.model for s in n.steps] == ["anthropic/claude-haiku-4-5"]
 
 
-def _pi_session(session_id: str) -> list[dict]:
-    return [{"type": "session", "sessionId": session_id}]
-
-
-# ── helpers: ClaudeRunner / claude CLI stream-json ───────────────────────────
-
-def _claude_text(text: str, session_id: str = "s1") -> dict:
-    return {
-        "type": "assistant",
-        "message": {"content": [{"type": "text", "text": text}]},
-        "session_id": session_id,
-    }
-
-
-def _claude_result(session_id: str, subtype: str = "success", is_error: bool = False) -> dict:
-    return {"type": "result", "subtype": subtype, "is_error": is_error, "session_id": session_id}
-
-
-# ── AgentNode: no model → PiRunner via subprocess ────────────────────────────
-
-async def test_run_sends_single_prompt_and_returns_0():
-    node = AgentNode(type="agent", name="n", steps=[AgentStep(prompt="hello")])
-    with patch("giver.kernel.nodes.agent.asyncio.create_subprocess_exec", return_value=_mock_proc(_DONE)):
-        assert await node.run() == 0
-
-
-async def test_run_streams_text_deltas_to_log(caplog):
-    node = AgentNode(type="agent", name="mynode", steps=[AgentStep(prompt="hi")])
-    with caplog.at_level(logging.INFO, logger="mynode"):
-        with patch("giver.kernel.nodes.agent.asyncio.create_subprocess_exec", return_value=_mock_proc(_TEXT)):
-            await node.run()
-    assert "hi" in caplog.text
-
-
-async def test_run_returns_1_when_stdout_closes_without_agent_end():
-    node = AgentNode(type="agent", name="n", steps=[AgentStep(prompt="p")])
-    with patch("giver.kernel.nodes.agent.asyncio.create_subprocess_exec", return_value=_mock_proc([])):
-        assert await node.run() == 1
-
-
-async def test_run_stops_after_failed_step():
-    node = AgentNode(
-        type="agent", name="n",
-        steps=[AgentStep(prompt="p1"), AgentStep(prompt="p2")],
+def test_nearest_declaration_wins():
+    n = node(
+        AgentStep(prompt="a"),
+        AgentStep(prompt="b", model="anthropic/claude-opus-4-5"),
+        model="anthropic/claude-sonnet-4-5",
     )
-    failed = [{"type": "agent_end", "willRetry": True}]
-    proc = _mock_proc(failed)
-    with patch("giver.kernel.nodes.agent.asyncio.create_subprocess_exec", return_value=proc) as m:
-        result = await node.run()
-
-    assert result == 1
-    # one-shot per step: a step that never ran is a process that never spawned
-    assert m.call_count == 1
+    n.apply_defaults(Defaults(model="anthropic/claude-haiku-4-5"))
+    assert [s.model for s in n.steps] == [
+        "anthropic/claude-sonnet-4-5",
+        "anthropic/claude-opus-4-5",
+    ]
 
 
-# ── PiRunner: model switching ─────────────────────────────────────────────────
-
-async def test_pi_runner_uses_step_model_over_default():
-    """Each step spawns its own process, so model switching is just a per-step flag."""
-    procs = [_mock_proc(_DONE), _mock_proc(_DONE)]
-    with patch("giver.kernel.nodes.agent.asyncio.create_subprocess_exec", side_effect=procs) as m:
-        await PiRunner().run(
-            [AgentStep(prompt="step 1"), AgentStep(prompt="step 2", model="gpt-4-turbo")],
-            default_model="gpt-4o",
-            log=logging.getLogger("n"),
-        )
-
-    first_cmd, second_cmd = m.call_args_list[0][0], m.call_args_list[1][0]
-    assert first_cmd[first_cmd.index("--model") + 1] == "gpt-4o"
-    assert second_cmd[second_cmd.index("--model") + 1] == "gpt-4-turbo"
+def test_bare_model_names_are_qualified():
+    n = node(AgentStep(prompt="a", model="claude-opus-4-5"))
+    n.apply_defaults(Defaults())
+    assert n.steps[0].model == "anthropic/claude-opus-4-5"
 
 
-async def test_pi_runner_forks_session_from_first_step():
-    """Fork rather than continue in place, so replay can't mutate the parent session."""
-    procs = [_mock_proc(_pi_session("sess-abc") + _DONE), _mock_proc(_DONE)]
-    with patch("giver.kernel.nodes.agent.asyncio.create_subprocess_exec", side_effect=procs) as m:
-        await PiRunner().run(
-            [AgentStep(prompt="p1"), AgentStep(prompt="p2")],
-            default_model="gpt-4o",
-            log=logging.getLogger("n"),
-        )
-
-    first_cmd, second_cmd = m.call_args_list[0][0], m.call_args_list[1][0]
-    assert "--fork" not in first_cmd
-    assert second_cmd[second_cmd.index("--fork") + 1] == "sess-abc"
+def test_inherits_harness_from_defaults():
+    n = node(AgentStep(prompt="a", model="anthropic/claude-opus-4-5"))
+    n.apply_defaults(Defaults(harness="claude-code"))
+    assert n.harness_name == "claude-code"
 
 
-# ── AgentNode: load-time runner validation ────────────────────────────────────
-
-def test_node_raises_on_mixed_vendors():
-    with pytest.raises(ValueError, match="mixes runners"):
-        AgentNode(type="agent", name="n", steps=[
-            AgentStep(prompt="a", model="claude-haiku-4"),
-            AgentStep(prompt="b", model="gpt-4o"),
-        ])
+def test_unset_harness_resolves_to_the_default():
+    """Resolved at load rather than left as None, so nothing downstream has to
+    re-derive what unset means."""
+    n = node(AgentStep(prompt="a", model="openai/gpt-5.5"))
+    n.apply_defaults(Defaults())
+    assert n.harness_name == "pi"
 
 
-def test_node_accepts_same_vendor_steps():
-    AgentNode(type="agent", name="n", steps=[
-        AgentStep(prompt="a", model="claude-haiku-4"),
-        AgentStep(prompt="b", model="claude-opus-4"),
-    ])
+def test_an_unknown_harness_fails_when_the_node_is_built():
+    with pytest.raises(ValidationError, match="unknown harness 'clyde'"):
+        node(AgentStep(prompt="a", model="openai/gpt-5.5"), harness="clyde")
 
 
-# ── ClaudeRunner ──────────────────────────────────────────────────────────────
-
-async def test_claude_runner_logs_text_and_returns_0(caplog):
-    proc = _mock_proc([_claude_text("hello"), _claude_result("s1")])
-    with caplog.at_level(logging.INFO):
-        with patch("giver.kernel.nodes.agent.asyncio.create_subprocess_exec", return_value=proc):
-            result = await ClaudeRunner().run(
-                [AgentStep(prompt="go")], default_model=None, log=logging.getLogger("t")
-            )
-
-    assert result == 0
-    assert "hello" in caplog.text
-    written = b"".join(c[0][0] for c in proc.stdin.write.call_args_list)
-    assert written == b"go"
+# ── load-time errors ──────────────────────────────────────────────────────────
 
 
-async def test_claude_runner_forks_session_from_first_step():
-    """Resume must fork: bare --resume continues in place and mutates the parent
-    session, which would corrupt the branch a checkpointed replay resumes from."""
-    procs = [_mock_proc([_claude_result("sess-abc")]), _mock_proc([_claude_result("sess-xyz")])]
-    with patch("giver.kernel.nodes.agent.asyncio.create_subprocess_exec", side_effect=procs) as m:
-        await ClaudeRunner().run(
-            [AgentStep(prompt="step1"), AgentStep(prompt="step2")],
-            default_model=None,
-            log=logging.getLogger("t"),
-        )
-
-    first_cmd, second_cmd = m.call_args_list[0][0], m.call_args_list[1][0]
-    assert "--resume" not in first_cmd and "--fork-session" not in first_cmd
-    assert second_cmd[second_cmd.index("--resume") + 1] == "sess-abc"
-    assert "--fork-session" in second_cmd
+def test_a_step_with_no_model_anywhere_is_an_error():
+    n = node(AgentStep(prompt="do the thing"))
+    with pytest.raises(ValueError, match="no model for step"):
+        n.apply_defaults(Defaults())
 
 
-async def test_claude_runner_passes_model_per_step():
-    proc = _mock_proc([_claude_result("s1")])
-    with patch("giver.kernel.nodes.agent.asyncio.create_subprocess_exec", return_value=proc) as m:
-        await ClaudeRunner().run(
-            [AgentStep(prompt="go", model="claude-opus-4")],
-            default_model="claude-haiku-4",
-            log=logging.getLogger("t"),
-        )
-
-    cmd = m.call_args_list[0][0]
-    assert "--model" in cmd and "claude-opus-4" in cmd
+def test_mixing_vendors_in_one_node_is_an_error():
+    n = node(
+        AgentStep(prompt="a", model="anthropic/claude-opus-4-5"),
+        AgentStep(prompt="b", model="openai/gpt-5.5"),
+    )
+    with pytest.raises(ValueError, match="mixes vendors"):
+        n.apply_defaults(Defaults())
 
 
-async def test_claude_runner_returns_1_on_non_success():
-    proc = _mock_proc([_claude_result("s1", subtype="error_max_turns", is_error=True)])
-    with patch("giver.kernel.nodes.agent.asyncio.create_subprocess_exec", return_value=proc):
-        result = await ClaudeRunner().run(
-            [AgentStep(prompt="go")], default_model=None, log=logging.getLogger("t")
-        )
-    assert result == 1
+def test_a_harness_that_cannot_serve_the_vendor_is_an_error():
+    n = node(AgentStep(prompt="a", model="openai/gpt-5.5"), harness="claude-code")
+    with pytest.raises(ValueError, match="does not serve vendor 'openai'"):
+        n.apply_defaults(Defaults())
+
+
+def test_claude_models_may_run_on_pi():
+    """Anthropic on an API key is legitimate — the harness is the user's call."""
+    n = node(AgentStep(prompt="a", model="anthropic/claude-opus-4-5"), harness="pi")
+    n.apply_defaults(Defaults())  # no raise
+
+
+def test_a_step_cannot_name_a_harness():
+    """The steps of a node share one session, and session ids belong to the
+    harness that issued them — so this must fail rather than be ignored."""
+    with pytest.raises(ValidationError, match="harness"):
+        AgentStep(prompt="a", model="anthropic/claude-opus-4-5", harness="pi")
+
+
+# ── behaviour ─────────────────────────────────────────────────────────────────
+
+
+async def test_run_delegates_to_the_named_harness():
+    n = node(AgentStep(prompt="a", model="anthropic/claude-opus-4-5"), harness="claude-code")
+    n.apply_defaults(Defaults())
+
+    with patch("giver.kernel.nodes.agent.harness_by_name") as by_name:
+        by_name.return_value.run = AsyncMock(return_value=0)
+        assert await n.run() == 0
+
+    by_name.assert_called_with("claude-code")
+    assert by_name.return_value.run.call_args[0][0] == n.steps
+
+
+def test_should_skip_when_the_output_exists(tmp_path):
+    existing = tmp_path / "out.md"
+    existing.write_text("done")
+    assert node(AgentStep(prompt="a"), output=str(existing)).should_skip()
+    assert not node(AgentStep(prompt="a"), output=str(tmp_path / "missing.md")).should_skip()
 
 
 # ── YAML loading ──────────────────────────────────────────────────────────────
 
-async def test_yaml_loads_as_agent_node_with_steps(workflows_dir):
-    from giver.kernel.workflow import Workflow
+
+def test_yaml_loads_as_agent_node_with_steps(workflows_dir):
     wf = Workflow.from_file(workflows_dir / "single_node_agent.yaml")
     node = wf.nodes[0]
     assert isinstance(node, AgentNode)
     assert node.steps[0].prompt == "say hello"
+    assert node.steps[0].model == "anthropic/claude-haiku-4-5"
 
 
-async def test_yaml_loads_model_and_per_step_override(workflows_dir):
-    from giver.kernel.workflow import Workflow
+def test_yaml_loads_model_and_per_step_override(workflows_dir):
     wf = Workflow.from_file(workflows_dir / "single_node_agent_with_model.yaml")
     node = wf.nodes[0]
-    assert isinstance(node, AgentNode)
-    assert node.model == "claude-haiku-4"
-    assert node.steps[1].model == "claude-opus-4"
-
-
-# ── _infer_provider ───────────────────────────────────────────────────────────
-
-@pytest.mark.parametrize("model,expected", [
-    ("claude-opus-4", "anthropic"),
-    ("claude-haiku-4", "anthropic"),
-    ("gpt-4o", "openai"),
-    ("o3-mini", "openai"),
-    ("unknown-model", None),
-    (None, None),
-])
-def test_infer_provider(model, expected):
-    assert _infer_provider(model) == expected
+    assert [s.model for s in node.steps] == [
+        "anthropic/claude-haiku-4-5",
+        "anthropic/claude-opus-4-5",
+    ]

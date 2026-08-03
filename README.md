@@ -37,7 +37,7 @@ giver run workflow.yaml
 
 ## Harnesses
 
-A **harness** is a coding-agent CLI that give'r drives — `pi` or `claude` today. give'r orchestrates; the harness does the agent work. One class describes each one: where it keeps credentials and sessions, what environment and ports it needs, how it gets installed, its REPL command, which vendors it can serve, and how to run a node's steps.
+A **harness** is a coding-agent CLI that give'r drives — `pi` or `claude-code` today. give'r orchestrates; the harness does the agent work. One class describes each one: where it keeps credentials and sessions, what environment and ports it needs, how it gets installed, its REPL command, which vendors it can serve, and how to run a node's steps.
 
 Nothing in give'r branches on which harness is running. Anything harness-specific is expressed through a mechanism every harness has, so adding one is a single class.
 
@@ -45,11 +45,11 @@ Nothing in give'r branches on which harness is running. Anything harness-specifi
 
 ```yaml
 defaults:
-  harness: claude              # or per-node
+  harness: claude-code              # or per-node
   model: anthropic/claude-opus-4-5
 ```
 
-Harnesses are driven as one-shot invocations per step, with continuity threaded through the harness's own session — `--fork` for pi, `--resume --fork-session` for claude. Forking rather than continuing in place leaves the parent session untouched, so re-running a step can't corrupt the one it branched from.
+Harnesses are driven as one-shot invocations per step, with continuity threaded through the harness's own session — `--fork` for pi, `--resume --fork-session` for claude-code. Forking rather than continuing in place leaves the parent session untouched, so re-running a step can't corrupt the one it branched from.
 
 ## Models
 
@@ -67,13 +67,15 @@ Which harness runs a step is decided by the workflow, not by the model: `harness
 
 ## Credentials
 
-give'r stores no credentials and defines no credential format. Each harness reads and writes its own, in its own location, on a Docker volume that persists between runs. Nothing is read from your host environment — give'r's logins are give'r's.
+give'r stores no credentials and defines no credential format. Each harness reads and writes its own, in its own location, on a Docker volume that persists between runs. A run mounts the volumes for the harnesses that workflow actually names, and nothing else.
+
+Your host's credentials are never read: give'r's logins live only inside give'r's own environment.
 
 Log in once per harness:
 
 ```bash
 giver shell pi        # drops you into bash with pi's volume mounted; run its login
-giver chat claude     # or straight into the harness's own REPL
+giver chat claude-code     # or straight into the harness's own REPL
 ```
 
 Missing credentials surface as that harness's own "not logged in" error on first use, with its own remedy.
@@ -96,7 +98,7 @@ giver chat <harness>                 # the harness's own REPL
 ```yaml
 defaults:
   model: anthropic/claude-haiku-4-5
-  harness: claude
+  harness: claude-code
 ```
 
 `model` cascades to every step; `harness` cascades to every node. Nearest declaration wins, so a node overrides the defaults and a step overrides its node.
@@ -108,7 +110,7 @@ defaults:
 ```yaml
 - name: plan
   type: agent
-  harness: claude              # optional; omitted means pi
+  harness: claude-code              # optional; omitted means pi
   model: anthropic/claude-haiku-4-5
   output: plan.md              # skip this node if the file already exists
   depends_on: [load-context]

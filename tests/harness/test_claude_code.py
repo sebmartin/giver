@@ -1,7 +1,7 @@
 import logging
 from unittest.mock import patch
 
-from giver.harness import AgentStep, ClaudeHarness
+from giver.harness import AgentStep, ClaudeCodeHarness
 
 
 def result_event(session_id: str, subtype: str = "success", is_error: bool = False) -> dict:
@@ -27,9 +27,9 @@ def step(prompt: str, model: str = "anthropic/claude-opus-4-5") -> AgentStep:
 
 async def run(steps, procs, log=None):
     with patch(
-        "giver.harness.claude.asyncio.create_subprocess_exec", side_effect=procs
+        "giver.harness.claude_code.asyncio.create_subprocess_exec", side_effect=procs
     ) as spawn:
-        result = await ClaudeHarness().run(steps, log or logging.getLogger("n"))
+        result = await ClaudeCodeHarness().run(steps, log or logging.getLogger("n"))
     return result, spawn
 
 

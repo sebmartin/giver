@@ -2,7 +2,7 @@ import pytest
 
 from giver.harness import (
     DEFAULT_HARNESS,
-    ClaudeHarness,
+    ClaudeCodeHarness,
     PiHarness,
     harness_by_name,
     resolve_model,
@@ -43,11 +43,11 @@ def test_unnamed_harness_is_pi():
 
 
 def test_harness_by_name():
-    assert harness_by_name("claude").name == "claude"
+    assert harness_by_name("claude-code").name == "claude-code"
 
 
 def test_unknown_harness_lists_the_choices():
-    with pytest.raises(ValueError, match="unknown harness 'nope'. choices: claude, pi"):
+    with pytest.raises(ValueError, match="unknown harness 'nope'. choices: claude-code, pi"):
         harness_by_name("nope")
 
 
@@ -61,7 +61,7 @@ def test_pi_serves_any_vendor(vendor):
     "vendor,expected", [("anthropic", True), ("openai", False), ("ollama", False)]
 )
 def test_claude_serves_only_anthropic(vendor, expected):
-    assert ClaudeHarness().serves(vendor) is expected
+    assert ClaudeCodeHarness().serves(vendor) is expected
 
 
 def test_harnesses_declare_the_infra_the_cli_needs():

@@ -42,14 +42,21 @@ def test_bare_model_names_are_qualified():
 
 def test_inherits_harness_from_defaults():
     n = node(AgentStep(prompt="a", model="anthropic/claude-opus-4-5"))
-    n.apply_defaults(Defaults(harness="claude"))
-    assert n.harness == "claude"
+    n.apply_defaults(Defaults(harness="claude-code"))
+    assert n.harness == "claude-code"
 
 
-def test_harness_defaults_to_none_meaning_pi():
+def test_unset_harness_resolves_to_the_default():
+    """Resolved at load rather than left as None, so nothing downstream has to
+    re-derive what unset means."""
     n = node(AgentStep(prompt="a", model="openai/gpt-5.5"))
     n.apply_defaults(Defaults())
-    assert n.harness is None
+    assert n.harness == "pi"
+
+
+def test_an_unknown_harness_fails_when_the_node_is_built():
+    with pytest.raises(ValidationError, match="unknown harness 'clyde'"):
+        node(AgentStep(prompt="a", model="openai/gpt-5.5"), harness="clyde")
 
 
 # ── load-time errors ──────────────────────────────────────────────────────────
@@ -71,7 +78,7 @@ def test_mixing_vendors_in_one_node_is_an_error():
 
 
 def test_a_harness_that_cannot_serve_the_vendor_is_an_error():
-    n = node(AgentStep(prompt="a", model="openai/gpt-5.5"), harness="claude")
+    n = node(AgentStep(prompt="a", model="openai/gpt-5.5"), harness="claude-code")
     with pytest.raises(ValueError, match="does not serve vendor 'openai'"):
         n.apply_defaults(Defaults())
 
@@ -93,14 +100,14 @@ def test_a_step_cannot_name_a_harness():
 
 
 async def test_run_delegates_to_the_named_harness():
-    n = node(AgentStep(prompt="a", model="anthropic/claude-opus-4-5"), harness="claude")
+    n = node(AgentStep(prompt="a", model="anthropic/claude-opus-4-5"), harness="claude-code")
     n.apply_defaults(Defaults())
 
     with patch("giver.kernel.nodes.agent.harness_by_name") as by_name:
         by_name.return_value.run = AsyncMock(return_value=0)
         assert await n.run() == 0
 
-    by_name.assert_called_with("claude")
+    by_name.assert_called_with("claude-code")
     assert by_name.return_value.run.call_args[0][0] == n.steps
 
 

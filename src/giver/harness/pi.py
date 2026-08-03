@@ -2,7 +2,8 @@ import asyncio
 import json
 import logging
 
-from giver.harness import AgentStep, drain_stderr
+from giver.harness.process import drain_stderr
+from giver.harness.protocol import AgentStep
 
 
 class PiHarness:

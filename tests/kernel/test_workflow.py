@@ -188,9 +188,9 @@ def test_defaults_cascade_to_every_step(workflows_dir):
     resolved = {n.name: (n.harness, [s.model for s in n.steps]) for n in wf.nodes}
 
     assert resolved == {
-        "inherits-everything": ("claude", ["anthropic/claude-haiku-4-5"]),
+        "inherits-everything": ("claude-code", ["anthropic/claude-haiku-4-5"]),
         "overrides-model-at-node": (
-            "claude",
+            "claude-code",
             ["anthropic/claude-opus-4-5", "anthropic/claude-haiku-4-5"],
         ),
         "overrides-harness-at-node": ("pi", ["anthropic/claude-haiku-4-5"]),

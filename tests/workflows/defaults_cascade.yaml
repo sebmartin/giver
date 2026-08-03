@@ -1,7 +1,7 @@
 name: defaults-cascade
 defaults:
   model: claude-haiku-4-5          # bare name — vendor inferred
-  harness: claude
+  harness: claude-code
 nodes:
   - name: inherits-everything
     type: agent

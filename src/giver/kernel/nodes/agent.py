@@ -4,7 +4,14 @@ from typing import TYPE_CHECKING, Literal
 
 from pydantic import BaseModel
 
-from giver.harness import AgentStep, harness_by_name, resolve_model, vendor_of
+from giver.harness import (
+    DEFAULT_HARNESS_NAME,
+    AgentStep,
+    HarnessName,
+    harness_by_name,
+    resolve_model,
+    vendor_of,
+)
 
 if TYPE_CHECKING:
     from giver.kernel.workflow import Defaults
@@ -16,7 +23,7 @@ class AgentNode(BaseModel):
     type: Literal["agent"]
     name: str
     depends_on: list[str] = []
-    harness: str | None = None
+    harness: HarnessName = None
     model: str | None = None
     output: str | None = None
     steps: list[AgentStep]
@@ -27,8 +34,9 @@ class AgentNode(BaseModel):
         Done at load time so a workflow that can't resolve fails before any
         container exists, and so `run()` never has to reason about defaults.
         """
-        if self.harness is None:
-            self.harness = defaults.harness
+        # Resolve to a concrete name at load time, so nothing downstream has to
+        # re-derive what "unset" means.
+        self.harness = self.harness or defaults.harness or DEFAULT_HARNESS_NAME
         node_model = self.model or defaults.model
         for step in self.steps:
             model = step.model or node_model
@@ -53,6 +61,9 @@ class AgentNode(BaseModel):
                 f"node {self.name!r}: harness {harness.name!r} does not serve "
                 f"vendor {vendor!r}"
             )
+
+    def harness_name(self) -> str | None:
+        return self.harness
 
     def should_skip(self) -> bool:
         return self.output is not None and Path(self.output).exists()

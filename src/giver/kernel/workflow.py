@@ -6,6 +6,7 @@ from pathlib import Path
 import yaml
 from pydantic import BaseModel, ConfigDict, model_validator
 
+from giver.harness import HarnessName
 from giver.kernel.logging import Logger
 from giver.kernel.nodes import Node, NodeField
 
@@ -21,7 +22,7 @@ class Defaults(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     model: str | None = None
-    harness: str | None = None
+    harness: HarnessName = None
 
 
 class Workflow(BaseModel):

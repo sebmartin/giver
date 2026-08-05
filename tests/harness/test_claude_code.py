@@ -27,7 +27,7 @@ def step(prompt: str, model: str = "anthropic/claude-opus-4-5") -> AgentStep:
 
 async def run(steps, procs, log=None):
     with patch(
-        "giver.harness.claude_code.asyncio.create_subprocess_exec", side_effect=procs
+        "giver.harness.process.asyncio.create_subprocess_exec", side_effect=procs
     ) as spawn:
         result = await ClaudeCodeHarness().run(steps, log or logging.getLogger("n"))
     return result, spawn

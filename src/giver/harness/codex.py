@@ -2,7 +2,7 @@ import asyncio
 import json
 import logging
 
-from giver.harness.process import drain_stderr
+from giver.harness.process import spawn
 from giver.harness.protocol import AgentStep
 
 
@@ -17,7 +17,8 @@ class CodexHarness:
       place**. There is no forking variant in headless mode, so `forks_on_resume`
       is False and replaying a step is not idempotent here.
     - It calls sessions *threads*: the id arrives as `thread_id` on a
-      `thread.started` event.
+      `thread.started` event. Resuming re-emits the *same* id, which is what
+      "in place" looks like on the wire.
     """
 
     name = "codex"
@@ -54,24 +55,15 @@ class CodexHarness:
                 cmd += [session_id]
             cmd += ["-"]  # prompt on stdin
 
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            asyncio.create_task(drain_stderr(proc, log))
-            proc.stdin.write(step.prompt.encode())
-            await proc.stdin.drain()
-            proc.stdin.close()
-
-            failed, session_id = await self._consume(proc, log, session_id)
+            proc, drain = await spawn(cmd, step.prompt, log)
+            ok, session_id = await self._consume(proc, log, session_id)
             exit_code = await proc.wait()
+            await drain
 
             if exit_code != 0:
                 log.error(f"codex exited {exit_code}")
                 return 1
-            if failed:
+            if not ok:
                 return 1
             if session_id is None and index < len(steps) - 1:
                 log.error("codex reported no thread id; the next step cannot resume")
@@ -81,35 +73,62 @@ class CodexHarness:
     async def _consume(
         self, proc: asyncio.subprocess.Process, log: logging.Logger, session_id: str | None
     ) -> tuple[bool, str | None]:
-        """Returns (failed, session_id).
+        """Returns (ok, session_id).
 
-        Success is the absence of an in-band `error` event on a stream that then
-        exits cleanly, rather than a positive completion event — the error and
-        `thread.started` shapes are observed, a completion event has not been.
-        Both failure channels still get read, which is what matters.
+        Success needs a positive `turn.completed`, the same polarity as pi's
+        `agent_end` and claude-code's `result`. Absence of evidence is not
+        success: a truncated stream and a terminal event under a name this code
+        does not know both land here, and give'r skips a node whose output
+        artifact exists — so a run wrongly recorded as successful can never be
+        regenerated.
+
+        The verdict comes only from turn-level events. An `error` item inside
+        `item.completed` is advisory — codex emits one for a soft condition
+        like unrecognised model metadata, then carries on — so it is logged and
+        left to `turn.completed`/`turn.failed` to adjudicate.
+
+        Event shapes verified against codex-cli 0.146.0.
         """
         assert proc.stdout is not None
+        success = False
         failed = False
         async for raw in proc.stdout:
             try:
                 event = json.loads(raw)
             except json.JSONDecodeError:
-                # codex interleaves plain-text log lines with its JSONL.
+                # Defensive: every observed stdout line is JSONL, but a stray
+                # plain-text line must not abort the run.
                 log.debug(f"unparsed stdout line: {raw!r}")
                 continue
             event_type = event.get("type")
             if event_type == "thread.started":
                 session_id = event.get("thread_id") or session_id
-            elif event_type == "error":
+            elif event_type == "turn.completed":
+                success = True
+            elif event_type in ("error", "turn.failed"):
                 failed = True
-                log.error(event.get("message", raw))
+                log.error(self._message(event) or raw)
             elif event_type == "item.completed":
                 item = event.get("item", {})
                 if item.get("type") == "error":
-                    failed = True
-                    log.error(item.get("message", raw))
+                    log.error(self._message(item) or raw)
                 elif text := item.get("text"):
                     log.info(text)
             else:
                 log.debug(f"unhandled event: {raw!r}")
-        return failed, session_id
+        if not success and not failed:
+            log.error("codex stream ended without a turn.completed event")
+        return success and not failed, session_id
+
+    @staticmethod
+    def _message(event: dict) -> str | None:
+        """codex reports a failure's text either flat or nested under `error`.
+
+        `error` and item errors carry `message`; `turn.failed` nests it under
+        `error`. Tolerant of the shape because the caller falls back to the raw
+        line: a failure must always be legible in the log, whatever carried it.
+        """
+        nested = event.get("error")
+        if isinstance(nested, dict):
+            nested = nested.get("message")
+        return event.get("message") or nested

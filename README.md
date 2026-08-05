@@ -57,7 +57,7 @@ Harnesses are driven as one-shot invocations per step, with continuity threaded 
 | `claude-code` | `claude -p` | `--resume <id> --fork-session` | yes, opt-in |
 | `codex` | `codex exec` | `codex exec resume <id>` | **no** |
 
-Branching leaves the parent session untouched, so re-running a step can't corrupt the one it came from. codex's headless mode has no branching variant — it resumes in place — so anything that replays work reads `forks_on_resume` rather than assuming every harness behaves like pi.
+Branching leaves the parent session untouched, so re-running a step can't corrupt the one it came from. codex's headless mode has no branching variant — it resumes in place. Every harness therefore declares `forks_on_resume` for replay logic to read; give'r replays at node granularity today (a node whose output artifact exists is skipped whole), so nothing consults the flag yet — step-level replay is where it becomes load-bearing.
 
 ## Models
 

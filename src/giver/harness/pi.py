@@ -2,7 +2,7 @@ import asyncio
 import json
 import logging
 
-from giver.harness.process import drain_stderr
+from giver.harness.process import spawn
 from giver.harness.protocol import AgentStep
 
 
@@ -37,19 +37,10 @@ class PiHarness:
             if session_id:
                 cmd += ["--fork", session_id]
 
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            asyncio.create_task(drain_stderr(proc, log))
-            proc.stdin.write(step.prompt.encode())
-            await proc.stdin.drain()
-            proc.stdin.close()
-
+            proc, drain = await spawn(cmd, step.prompt, log)
             ok, session_id = await self._consume(proc, log, session_id)
             exit_code = await proc.wait()
+            await drain
 
             # Two independent failure channels: a non-zero exit, and an in-band
             # failure reported on a stream that then exited cleanly.

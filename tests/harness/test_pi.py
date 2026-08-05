@@ -23,7 +23,9 @@ def step(prompt: str, model: str = "openai/gpt-5.5") -> AgentStep:
 
 
 async def run(steps, procs, log=None):
-    with patch("giver.harness.pi.asyncio.create_subprocess_exec", side_effect=procs) as spawn:
+    with patch(
+        "giver.harness.process.asyncio.create_subprocess_exec", side_effect=procs
+    ) as spawn:
         result = await PiHarness().run(steps, log or logging.getLogger("n"))
     return result, spawn
 

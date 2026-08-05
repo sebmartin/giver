@@ -36,6 +36,11 @@ class Harness(Protocol):
     repl_cmd: tuple[str, ...]  # interactive launch argv
     install: str  # shell command that installs it; one generated RUN line
 
+    # Can it branch a session instead of continuing it in place? Branching
+    # leaves the parent untouched, which is what makes replaying a step safe.
+    # pi and claude-code can; codex cannot. Read it rather than assume it.
+    forks_on_resume: bool
+
     def serves(self, vendor: str) -> bool: ...
 
     async def run(self, steps: list[AgentStep], log: logging.Logger) -> int: ...

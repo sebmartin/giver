@@ -2,7 +2,9 @@ import pytest
 
 from giver.harness import (
     DEFAULT_HARNESS,
+    HARNESSES,
     ClaudeCodeHarness,
+    CodexHarness,
     PiHarness,
     harness_by_name,
     resolve_model,
@@ -47,7 +49,7 @@ def test_harness_by_name():
 
 
 def test_unknown_harness_lists_the_choices():
-    with pytest.raises(ValueError, match="unknown harness 'nope'. choices: claude-code, pi"):
+    with pytest.raises(ValueError, match="unknown harness 'nope'. choices: claude-code, codex, pi"):
         harness_by_name("nope")
 
 
@@ -71,3 +73,26 @@ def test_harnesses_declare_the_infra_the_cli_needs():
         ("53692:53692",),
         {"PI_OAUTH_CALLBACK_HOST": "0.0.0.0"},
     )
+
+
+def test_codex_is_registered():
+    assert harness_by_name("codex").name == "codex"
+
+
+@pytest.mark.parametrize(
+    "vendor,expected",
+    [("openai", True), ("anthropic", False), ("ollama", False), ("google", False)],
+)
+def test_codex_serves_only_openai(vendor, expected):
+    """A vendor codex wrongly claimed would route that model's steps to it."""
+    assert CodexHarness().serves(vendor) is expected
+
+
+def test_every_harness_declares_whether_it_can_fork():
+    """Branching is what makes a replayed step safe, and it is not universal —
+    codex's headless resume continues a thread in place."""
+    assert {h.name: h.forks_on_resume for h in HARNESSES} == {
+        "claude-code": True,
+        "codex": False,
+        "pi": True,
+    }

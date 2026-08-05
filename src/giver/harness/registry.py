@@ -3,10 +3,11 @@ from typing import Annotated
 from pydantic import AfterValidator
 
 from giver.harness.claude_code import ClaudeCodeHarness
+from giver.harness.codex import CodexHarness
 from giver.harness.pi import PiHarness
 from giver.harness.protocol import Harness
 
-HARNESSES: tuple[Harness, ...] = (ClaudeCodeHarness(), PiHarness())
+HARNESSES: tuple[Harness, ...] = (ClaudeCodeHarness(), CodexHarness(), PiHarness())
 
 # pi is the batteries-included path: it works in its default configuration and
 # serves any vendor by API key. Named rather than taken from the end of the

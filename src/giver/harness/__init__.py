@@ -17,8 +17,9 @@ importing each other:
 """
 
 from giver.harness.claude_code import ClaudeCodeHarness
+from giver.harness.codex import CodexHarness
 from giver.harness.pi import PiHarness
-from giver.harness.process import drain_stderr
+from giver.harness.process import spawn
 from giver.harness.protocol import AgentStep, Harness
 from giver.harness.registry import (
     DEFAULT_HARNESS,
@@ -38,11 +39,12 @@ __all__ = [
     "VENDOR_PREFIXES",
     "AgentStep",
     "ClaudeCodeHarness",
+    "CodexHarness",
     "Harness",
     "HarnessName",
     "PiHarness",
-    "drain_stderr",
     "harness_by_name",
     "resolve_model",
+    "spawn",
     "vendor_of",
 ]

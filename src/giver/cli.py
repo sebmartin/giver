@@ -1,4 +1,5 @@
 import argparse
+import os
 import subprocess
 import sys
 import time
@@ -35,9 +36,33 @@ def _ensure_image() -> None:
         sys.exit(1)
 
 
+# The container runs as an unprivileged user, so `~` is this and not `/root`.
+# A harness running unattended asks for no permission prompts, and root plus no
+# prompts is a wider blast radius than either alone — claude-code refuses the
+# combination outright.
+_CONTAINER_HOME = "/home/giver"
+
+
+def _user_args() -> list[str]:
+    """Run the container as the host user who invoked give'r.
+
+    A run writes its logs and artifacts onto a bind mount, and on a Linux host
+    the uid crosses the boundary unchanged — so whatever the container creates
+    has to already belong to the person who will read it afterwards. Taking the
+    host's uid also makes the state volumes stable across runs on that machine.
+
+    `HOME` is passed because a uid with no `/etc/passwd` entry has no home
+    directory to look up, and every path give'r derives hangs off `~`.
+    """
+    return [
+        "--user", f"{os.getuid()}:{os.getgid()}",
+        "-e", f"HOME={_CONTAINER_HOME}",
+    ]
+
+
 # A harness describes itself in its own terms — pi says `~/.pi/agent`. These
-# translate that into the Docker names for a root container, which is knowledge
-# the host has and the harness shouldn't.
+# translate that into the Docker names for the container, which is knowledge the
+# host has and the harness shouldn't.
 def _volume(harness: Harness) -> str:
     # `state`, not `creds`: it is the harness's whole `state_path` — sessions,
     # config and project history as much as the token.
@@ -45,7 +70,7 @@ def _volume(harness: Harness) -> str:
 
 
 def _container_path(harness: Harness) -> str:
-    return "/root/" + harness.state_path.removeprefix("~/")
+    return f"{_CONTAINER_HOME}/" + harness.state_path.removeprefix("~/")
 
 
 def _harness_args(harness: Harness, interactive: bool) -> list[str]:
@@ -81,6 +106,7 @@ def _run_container(workflow_abs: Path, runs_dir: Path, name: str) -> None:
     cmd = [
         "docker", "run", "-d",
         "--name", name,
+        *_user_args(),
         "-v", f"{workflow_abs}:/workflow.yaml:ro",
         "-v", f"{runs_dir}:/runs",
     ]
@@ -105,7 +131,7 @@ def _interactive(harness_name: str | None, entrypoint: list[str]) -> int:
     runs on this path.
     """
     _ensure_image()
-    cmd = ["docker", "run", "--rm", "-it"]
+    cmd = ["docker", "run", "--rm", "-it", *_user_args()]
     prepare: list[str] = []
     if harness_name is not None:
         try:

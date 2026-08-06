@@ -1,6 +1,8 @@
 import asyncio
 import json
 import logging
+import os
+from pathlib import Path
 
 from giver.harness.process import spawn
 from giver.harness.protocol import AgentStep
@@ -36,6 +38,26 @@ class ClaudeCodeHarness:
 
     def serves(self, vendor: str) -> bool:
         return vendor in self._VENDORS
+
+    def prepare(self) -> None:
+        """Point claude's config at its own state directory.
+
+        claude keeps `.claude.json` — onboarding, the `oauthAccount` identity,
+        per-project trust — *outside* the directory it stores everything else
+        in. Persisting `state_path` alone therefore keeps the credentials and
+        loses the identity, and claude reads as logged out with a valid token
+        sitting right next to it. `CLAUDE_CONFIG_DIR` is claude's own answer to
+        this: it moves that file inside the directory.
+
+        Set here rather than declared in `env` because the value is an absolute
+        path. Where `state_path` lands is give'r's decision, not something this
+        class should be stating — and `~` only means anything in the environment
+        the harness actually runs in, which is this one. An explicit setting
+        from outside wins.
+        """
+        os.environ.setdefault(
+            "CLAUDE_CONFIG_DIR", str(Path(self.state_path).expanduser())
+        )
 
     async def run(self, steps: list[AgentStep], log: logging.Logger) -> int:
         session_id: str | None = None

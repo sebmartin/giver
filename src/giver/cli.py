@@ -39,7 +39,9 @@ def _ensure_image() -> None:
 # translate that into the Docker names for a root container, which is knowledge
 # the host has and the harness shouldn't.
 def _volume(harness: Harness) -> str:
-    return f"giver-{harness.name}-creds"
+    # `state`, not `creds`: it is the harness's whole `state_path` — sessions,
+    # config and project history as much as the token.
+    return f"giver-{harness.name}-state"
 
 
 def _container_path(harness: Harness) -> str:
@@ -47,9 +49,9 @@ def _container_path(harness: Harness) -> str:
 
 
 def _harness_args(harness: Harness, interactive: bool) -> list[str]:
-    """Docker arguments a harness needs: its environment, its credential and
-    session volume, and — only when someone will interact with it — the ports
-    its login flow listens on.
+    """Docker arguments a harness needs: its environment, its state volume, and
+    — only when someone will interact with it — the ports its login flow listens
+    on.
 
     A run publishes no ports: logging in happens beforehand via `giver shell`,
     and a headless step has nothing to answer an OAuth callback with.
@@ -94,8 +96,17 @@ def _run_container(workflow_abs: Path, runs_dir: Path, name: str) -> None:
 
 
 def _interactive(harness_name: str | None, entrypoint: list[str]) -> int:
+    """An interactive container, entered through give'r rather than directly.
+
+    The command is reached via `giver.harness`, which prepares the harness in
+    the container and then execs it. Mounting a harness's state is only half of
+    provisioning it — a harness that keeps state outside the directory give'r
+    mounts has to reconcile that first, and here is the only place give'r code
+    runs on this path.
+    """
     _ensure_image()
     cmd = ["docker", "run", "--rm", "-it"]
+    prepare: list[str] = []
     if harness_name is not None:
         try:
             harness = harness_by_name(harness_name)
@@ -103,13 +114,15 @@ def _interactive(harness_name: str | None, entrypoint: list[str]) -> int:
             print(f"error: {e}", file=sys.stderr)
             return 1
         cmd += _harness_args(harness, interactive=True)
-    cmd += ["--entrypoint", *entrypoint, "giver:latest"]
+        prepare = ["--harness", harness.name]
+    cmd += ["--entrypoint", "python", "giver:latest"]
+    cmd += ["-m", "giver.harness", *prepare, "--", *entrypoint]
     return subprocess.run(cmd).returncode
 
 
 def shell(harness: str | None = None) -> int:
-    """Bash inside the sandbox with a harness's credential volume mounted —
-    the manual first-pass auth path. Bare `giver shell` is a plain container."""
+    """Bash inside the sandbox with a harness's state volume mounted — the
+    manual first-pass auth path. Bare `giver shell` is a plain container."""
     return _interactive(harness, ["bash"])
 
 
@@ -175,7 +188,7 @@ def main() -> None:
         "harness",
         nargs="?",
         choices=HARNESS_NAMES,
-        help="harness whose credentials to mount (omit for a bare container shell)",
+        help="harness whose state to mount (omit for a bare container shell)",
     )
 
     chat_p = sub.add_parser("chat", help="open a harness's own REPL in the giver container")

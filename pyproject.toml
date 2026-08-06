@@ -22,6 +22,10 @@ build-backend = "hatchling.build"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+# Test structure mirrors source structure, so two packages that each have a
+# `__main__.py` each get a `test_main.py`. importlib import mode keeps those
+# from colliding without turning `tests/` into a package.
+addopts = "--import-mode=importlib"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/giver"]

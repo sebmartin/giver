@@ -88,6 +88,14 @@ def test_codex_serves_only_openai(vendor, expected):
     assert CodexHarness().serves(vendor) is expected
 
 
+def test_every_harness_can_be_prepared(tmp_path, monkeypatch):
+    """`prepare` is a customization point every harness has, not a hook one of
+    them needed — give'r calls it without knowing which harness it holds."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    for harness in HARNESSES:
+        harness.prepare()
+
+
 def test_every_harness_declares_whether_it_can_fork():
     """Branching is what makes a replayed step safe, and it is not universal —
     codex's headless resume continues a thread in place."""

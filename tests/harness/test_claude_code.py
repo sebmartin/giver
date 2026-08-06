@@ -1,5 +1,8 @@
 import logging
+import os
 from unittest.mock import patch
+
+import pytest
 
 from giver.harness import AgentStep, ClaudeCodeHarness
 
@@ -73,3 +76,49 @@ async def test_fails_on_a_non_success_result(mock_proc):
 async def test_fails_on_nonzero_exit_despite_a_clean_stream(mock_proc):
     result, _ = await run([step("go")], [mock_proc([result_event("s1")], exit_code=1)])
     assert result == 1
+
+
+# ── prepare ───────────────────────────────────────────────────────────────────
+
+
+@pytest.fixture
+def home(tmp_path, monkeypatch):
+    """A home directory, with no config location already chosen."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    return tmp_path
+
+
+def test_prepare_moves_the_config_into_the_state_directory(home):
+    """claude keeps `.claude.json` outside the directory it stores everything
+    else in, so persisting `state_path` alone keeps the credentials and loses
+    the onboarding and account identity that file carries."""
+    ClaudeCodeHarness().prepare()
+
+    assert os.environ["CLAUDE_CONFIG_DIR"] == str(home / ".claude")
+
+
+def test_prepare_states_a_path_it_resolves_rather_than_one_it_declares(home):
+    """`state_path` is the harness's own vocabulary; give'r decides where that
+    lands. Expanding it here keeps the container path out of the class."""
+    assert "~" in ClaudeCodeHarness.state_path
+
+    ClaudeCodeHarness().prepare()
+
+    assert "~" not in os.environ["CLAUDE_CONFIG_DIR"]
+
+
+def test_prepare_defers_to_a_config_location_already_chosen(home, monkeypatch):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/somewhere/deliberate")
+
+    ClaudeCodeHarness().prepare()
+
+    assert os.environ["CLAUDE_CONFIG_DIR"] == "/somewhere/deliberate"
+
+
+def test_prepare_is_idempotent(home):
+    harness = ClaudeCodeHarness()
+    harness.prepare()
+    harness.prepare()
+
+    assert os.environ["CLAUDE_CONFIG_DIR"] == str(home / ".claude")

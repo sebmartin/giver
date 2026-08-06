@@ -179,22 +179,22 @@ def _start_cmd(wf, tmp_path):
     return _docker_calls(mock)[1]
 
 
-def test_run_mounts_harness_credential_volumes_writable(tmp_path):
+def test_run_mounts_harness_state_volumes_writable(tmp_path):
     """Writable, not read-only: the harnesses write session transcripts and
     refreshed tokens into these directories during a run, so a read-only mount
     breaks multi-step nodes, resume, and unattended auth alike."""
     cmd = _start_cmd(_agent_workflow(tmp_path, "pi", "claude-code"), tmp_path)
 
-    assert "giver-pi-creds:/root/.pi/agent" in cmd
-    assert "giver-claude-code-creds:/root/.claude" in cmd
-    assert not any(c.endswith(":ro") and "creds" in c for c in cmd)
+    assert "giver-pi-state:/root/.pi/agent" in cmd
+    assert "giver-claude-code-state:/root/.claude" in cmd
+    assert not any(c.endswith(":ro") and "-state" in c for c in cmd)
 
 
 def test_run_mounts_only_the_harnesses_the_workflow_uses(tmp_path):
     cmd = _start_cmd(_agent_workflow(tmp_path, "pi"), tmp_path)
 
-    assert "giver-pi-creds:/root/.pi/agent" in cmd
-    assert not any("claude-code-creds" in c for c in cmd)
+    assert "giver-pi-state:/root/.pi/agent" in cmd
+    assert not any("claude-code-state" in c for c in cmd)
 
 
 def test_run_mounts_nothing_for_a_workflow_with_no_agent_nodes(tmp_path):
@@ -202,7 +202,7 @@ def test_run_mounts_nothing_for_a_workflow_with_no_agent_nodes(tmp_path):
     wf.write_text("name: test\nnodes:\n  - name: b\n    type: bash\n    command: 'true'\n")
 
     cmd = _start_cmd(wf, tmp_path)
-    assert not any("creds" in c for c in cmd)
+    assert not any("-state" in c for c in cmd)
 
 
 def test_run_applies_harness_environment_but_publishes_no_ports(tmp_path):
@@ -234,7 +234,7 @@ def test_shell_pi_drops_into_bash_with_pi_volume():
     assert "--rm" in cmd and "-it" in cmd
     assert "53692:53692" in cmd
     assert "PI_OAUTH_CALLBACK_HOST=0.0.0.0" in cmd
-    assert "giver-pi-creds:/root/.pi/agent" in cmd  # writable — login persists to the volume
+    assert "giver-pi-state:/root/.pi/agent" in cmd  # writable — login persists to the volume
     assert cmd[-9:] == [
         "--entrypoint", "python", "giver:latest",
         "-m", "giver.harness", "--harness", "pi", "--", "bash",
@@ -246,12 +246,12 @@ def test_shell_claude_drops_into_bash_with_claude_volume():
         shell("claude-code")
 
     cmd = _docker_calls(mock)[1]
-    assert "giver-claude-code-creds:/root/.claude" in cmd
+    assert "giver-claude-code-state:/root/.claude" in cmd
     assert cmd[-1] == "bash"
 
 
 def test_shell_enters_through_giver_so_the_harness_is_prepared(tmp_path):
-    """The credential volume is only half of provisioning: claude keeps its
+    """The state volume is only half of provisioning: claude keeps its
     config outside the directory give'r mounts, and `giver shell` is the
     first-pass login path — the one place it must already be reconciled."""
     with patch("giver.cli.subprocess.run", return_value=MagicMock(returncode=0)) as mock:
@@ -292,7 +292,7 @@ def test_chat_launches_the_harness_repl_with_the_same_provisioning():
 
     cmd = _docker_calls(mock)[1]
     assert "53692:53692" in cmd  # same declared infra as `shell pi`
-    assert "giver-pi-creds:/root/.pi/agent" in cmd
+    assert "giver-pi-state:/root/.pi/agent" in cmd
     assert cmd[cmd.index("--entrypoint"):] == [
         "--entrypoint", "python", "giver:latest",
         "-m", "giver.harness", "--harness", "pi", "--", "pi",

@@ -39,7 +39,9 @@ def _ensure_image() -> None:
 # translate that into the Docker names for a root container, which is knowledge
 # the host has and the harness shouldn't.
 def _volume(harness: Harness) -> str:
-    return f"giver-{harness.name}-creds"
+    # `state`, not `creds`: it is the harness's whole `state_path` — sessions,
+    # config and project history as much as the token.
+    return f"giver-{harness.name}-state"
 
 
 def _container_path(harness: Harness) -> str:
@@ -47,9 +49,9 @@ def _container_path(harness: Harness) -> str:
 
 
 def _harness_args(harness: Harness, interactive: bool) -> list[str]:
-    """Docker arguments a harness needs: its environment, its credential and
-    session volume, and — only when someone will interact with it — the ports
-    its login flow listens on.
+    """Docker arguments a harness needs: its environment, its state volume, and
+    — only when someone will interact with it — the ports its login flow listens
+    on.
 
     A run publishes no ports: logging in happens beforehand via `giver shell`,
     and a headless step has nothing to answer an OAuth callback with.
@@ -119,8 +121,8 @@ def _interactive(harness_name: str | None, entrypoint: list[str]) -> int:
 
 
 def shell(harness: str | None = None) -> int:
-    """Bash inside the sandbox with a harness's credential volume mounted —
-    the manual first-pass auth path. Bare `giver shell` is a plain container."""
+    """Bash inside the sandbox with a harness's state volume mounted — the
+    manual first-pass auth path. Bare `giver shell` is a plain container."""
     return _interactive(harness, ["bash"])
 
 
@@ -186,7 +188,7 @@ def main() -> None:
         "harness",
         nargs="?",
         choices=HARNESS_NAMES,
-        help="harness whose credentials to mount (omit for a bare container shell)",
+        help="harness whose state to mount (omit for a bare container shell)",
     )
 
     chat_p = sub.add_parser("chat", help="open a harness's own REPL in the giver container")

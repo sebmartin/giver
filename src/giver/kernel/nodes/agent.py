@@ -71,4 +71,9 @@ class AgentNode(BaseModel):
 
     async def run(self) -> int:
         log = logging.getLogger(self.name)
-        return await harness_by_name(self.harness_name).run(self.steps, log)
+        harness = harness_by_name(self.harness_name)
+        # Here rather than at kernel startup so it holds however the node was
+        # reached — including a CI run that executes the kernel directly and
+        # never goes through give'r's CLI.
+        harness.prepare()
+        return await harness.run(self.steps, log)

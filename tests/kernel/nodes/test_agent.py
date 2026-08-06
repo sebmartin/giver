@@ -111,6 +111,23 @@ async def test_run_delegates_to_the_named_harness():
     assert by_name.return_value.run.call_args[0][0] == n.steps
 
 
+async def test_run_prepares_the_harness_before_using_it():
+    """Mounting a harness's state is only half of provisioning it — one that
+    keeps state elsewhere reconciles that in `prepare`, and a node reached
+    without give'r's CLI (CI running the kernel directly) has no other chance."""
+    n = node(AgentStep(prompt="a", model="anthropic/claude-opus-4-5"), harness="claude-code")
+    n.apply_defaults(Defaults())
+
+    calls = []
+    with patch("giver.kernel.nodes.agent.harness_by_name") as by_name:
+        harness = by_name.return_value
+        harness.prepare = lambda: calls.append("prepare")
+        harness.run = AsyncMock(side_effect=lambda *a: calls.append("run") or 0)
+        await n.run()
+
+    assert calls == ["prepare", "run"]
+
+
 def test_should_skip_when_the_output_exists(tmp_path):
     existing = tmp_path / "out.md"
     existing.write_text("done")

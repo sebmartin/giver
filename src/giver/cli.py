@@ -94,8 +94,17 @@ def _run_container(workflow_abs: Path, runs_dir: Path, name: str) -> None:
 
 
 def _interactive(harness_name: str | None, entrypoint: list[str]) -> int:
+    """An interactive container, entered through give'r rather than directly.
+
+    The command is reached via `giver.harness`, which prepares the harness in
+    the container and then execs it. Mounting a harness's state is only half of
+    provisioning it — a harness that keeps state outside the directory give'r
+    mounts has to reconcile that first, and here is the only place give'r code
+    runs on this path.
+    """
     _ensure_image()
     cmd = ["docker", "run", "--rm", "-it"]
+    prepare: list[str] = []
     if harness_name is not None:
         try:
             harness = harness_by_name(harness_name)
@@ -103,7 +112,9 @@ def _interactive(harness_name: str | None, entrypoint: list[str]) -> int:
             print(f"error: {e}", file=sys.stderr)
             return 1
         cmd += _harness_args(harness, interactive=True)
-    cmd += ["--entrypoint", *entrypoint, "giver:latest"]
+        prepare = ["--harness", harness.name]
+    cmd += ["--entrypoint", "python", "giver:latest"]
+    cmd += ["-m", "giver.harness", *prepare, "--", *entrypoint]
     return subprocess.run(cmd).returncode
 
 

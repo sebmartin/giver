@@ -39,6 +39,10 @@ class CodexHarness:
     def serves(self, vendor: str) -> bool:
         return vendor in self._VENDORS
 
+    def prepare(self) -> None:
+        """Nothing to arrange: `auth.json`, `config.toml` and sessions all sit
+        under `state_path`."""
+
     async def run(self, steps: list[AgentStep], log: logging.Logger) -> int:
         session_id: str | None = None
         for index, step in enumerate(steps):

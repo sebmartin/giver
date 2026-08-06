@@ -43,4 +43,16 @@ class Harness(Protocol):
 
     def serves(self, vendor: str) -> bool: ...
 
+    def prepare(self) -> None:
+        """Arrange whatever this harness needs before it is used, in place.
+
+        Called in the environment the harness will run in, once per entry
+        point: the CLI's shim runs it before handing a container to `shell` or
+        `chat`, and an agent node runs it before its steps. give'r decides where
+        a harness's `state_path` lands; `prepare` is where the harness reconciles
+        that with anything it keeps elsewhere. Must be idempotent — parallel
+        nodes call it concurrently — and must not destroy state it did not
+        write, because the same code runs against a real home directory.
+        """
+
     async def run(self, steps: list[AgentStep], log: logging.Logger) -> int: ...

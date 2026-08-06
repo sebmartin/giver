@@ -1,6 +1,8 @@
 import asyncio
 import json
 import logging
+from contextlib import suppress
+from pathlib import Path
 
 from giver.harness.process import spawn
 from giver.harness.protocol import AgentStep
@@ -36,6 +38,37 @@ class ClaudeCodeHarness:
 
     def serves(self, vendor: str) -> bool:
         return vendor in self._VENDORS
+
+    def prepare(self) -> None:
+        """Bring `~/.claude.json` inside the state directory.
+
+        claude splits its state in two: sessions and credentials live under
+        `~/.claude`, but the config file is `~/.claude.json` — a *sibling* of
+        that directory, not a file in it. Anything that persists `state_path`
+        alone therefore keeps the credentials and loses the config, and the
+        config is what carries `hasCompletedOnboarding` and the `oauthAccount`
+        identity — so the agent reads as logged out and re-runs onboarding even
+        though its token is right there. Linking the config into the state
+        directory means whatever backs `~/.claude` backs both.
+
+        Careful about what it displaces, because give'r is meant to run without
+        a container too, where `~/.claude.json` is someone's real config: an
+        existing file is moved in rather than dropped, and if both sides hold
+        one this leaves them alone rather than picking a winner.
+        """
+        link = Path("~/.claude.json").expanduser()
+        target = Path("~/.claude/claude.json").expanduser()
+        if link.is_symlink():
+            return
+        if link.exists():
+            if target.exists():
+                return
+            target.parent.mkdir(parents=True, exist_ok=True)
+            link.rename(target)
+        else:
+            target.parent.mkdir(parents=True, exist_ok=True)
+        with suppress(FileExistsError):  # parallel nodes prepare concurrently
+            link.symlink_to(target)
 
     async def run(self, steps: list[AgentStep], log: logging.Logger) -> int:
         session_id: str | None = None

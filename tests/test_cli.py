@@ -235,7 +235,10 @@ def test_shell_pi_drops_into_bash_with_pi_volume():
     assert "53692:53692" in cmd
     assert "PI_OAUTH_CALLBACK_HOST=0.0.0.0" in cmd
     assert "giver-pi-creds:/root/.pi/agent" in cmd  # writable — login persists to the volume
-    assert cmd[-3:] == ["--entrypoint", "bash", "giver:latest"]
+    assert cmd[-9:] == [
+        "--entrypoint", "python", "giver:latest",
+        "-m", "giver.harness", "--harness", "pi", "--", "bash",
+    ]
 
 
 def test_shell_claude_drops_into_bash_with_claude_volume():
@@ -244,15 +247,35 @@ def test_shell_claude_drops_into_bash_with_claude_volume():
 
     cmd = _docker_calls(mock)[1]
     assert "giver-claude-code-creds:/root/.claude" in cmd
-    assert cmd[-3:] == ["--entrypoint", "bash", "giver:latest"]
+    assert cmd[-1] == "bash"
 
 
-def test_shell_no_harness_is_bare_bash():
+def test_shell_enters_through_giver_so_the_harness_is_prepared(tmp_path):
+    """The credential volume is only half of provisioning: claude keeps its
+    config outside the directory give'r mounts, and `giver shell` is the
+    first-pass login path — the one place it must already be reconciled."""
+    with patch("giver.cli.subprocess.run", return_value=MagicMock(returncode=0)) as mock:
+        shell("claude-code")
+
+    cmd = _docker_calls(mock)[1]
+    tail = cmd[cmd.index("--entrypoint"):]
+    assert tail == [
+        "--entrypoint", "python", "giver:latest",
+        "-m", "giver.harness", "--harness", "claude-code", "--", "bash",
+    ]
+
+
+def test_shell_no_harness_still_reaches_bash():
+    """Nothing to prepare, same way in — one path, not two."""
     with patch("giver.cli.subprocess.run", return_value=MagicMock(returncode=0)) as mock:
         shell()
 
     cmd = _docker_calls(mock)[1]
-    assert cmd == ["docker", "run", "--rm", "-it", "--entrypoint", "bash", "giver:latest"]
+    assert cmd == [
+        "docker", "run", "--rm", "-it",
+        "--entrypoint", "python", "giver:latest",
+        "-m", "giver.harness", "--", "bash",
+    ]
 
 
 def test_shell_unknown_harness_returns_1():
@@ -270,7 +293,10 @@ def test_chat_launches_the_harness_repl_with_the_same_provisioning():
     cmd = _docker_calls(mock)[1]
     assert "53692:53692" in cmd  # same declared infra as `shell pi`
     assert "giver-pi-creds:/root/.pi/agent" in cmd
-    assert cmd[-3:] == ["--entrypoint", "pi", "giver:latest"]
+    assert cmd[cmd.index("--entrypoint"):] == [
+        "--entrypoint", "python", "giver:latest",
+        "-m", "giver.harness", "--harness", "pi", "--", "pi",
+    ]
 
 
 def test_chat_unknown_harness_returns_1():

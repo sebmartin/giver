@@ -1,6 +1,8 @@
 import logging
 from unittest.mock import patch
 
+import pytest
+
 from giver.harness import AgentStep, ClaudeCodeHarness
 
 
@@ -73,3 +75,64 @@ async def test_fails_on_a_non_success_result(mock_proc):
 async def test_fails_on_nonzero_exit_despite_a_clean_stream(mock_proc):
     result, _ = await run([step("go")], [mock_proc([result_event("s1")], exit_code=1)])
     assert result == 1
+
+
+# ── prepare ───────────────────────────────────────────────────────────────────
+
+
+@pytest.fixture
+def home(tmp_path, monkeypatch):
+    """A home directory whose `~/.claude` is the mounted state directory."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    (tmp_path / ".claude").mkdir()
+    return tmp_path
+
+
+def test_prepare_puts_the_config_inside_the_state_directory(home):
+    """`~/.claude.json` is a sibling of `~/.claude`, so persisting the state
+    directory alone keeps the credentials and loses the config — which is what
+    carries onboarding and the account identity."""
+    ClaudeCodeHarness().prepare()
+
+    (home / ".claude.json").write_text('{"hasCompletedOnboarding": true}')
+
+    assert (home / ".claude/claude.json").read_text() == '{"hasCompletedOnboarding": true}'
+
+
+def test_prepare_is_idempotent(home):
+    harness = ClaudeCodeHarness()
+    harness.prepare()
+    (home / ".claude.json").write_text('{"kept": true}')
+    harness.prepare()
+
+    assert (home / ".claude/claude.json").read_text() == '{"kept": true}'
+
+
+def test_prepare_adopts_a_config_written_before_the_link_existed(home):
+    (home / ".claude.json").write_text('{"oauthAccount": "someone"}')
+
+    ClaudeCodeHarness().prepare()
+
+    assert (home / ".claude.json").is_symlink()
+    assert (home / ".claude/claude.json").read_text() == '{"oauthAccount": "someone"}'
+
+
+def test_prepare_leaves_a_real_config_alone_when_the_state_directory_has_one(home):
+    """give'r is meant to run without a container too, where `~/.claude.json` is
+    someone's actual config. Two real files is not a case to resolve by
+    guessing — neither is destroyed."""
+    (home / ".claude.json").write_text('{"which": "home"}')
+    (home / ".claude/claude.json").write_text('{"which": "state"}')
+
+    ClaudeCodeHarness().prepare()
+
+    assert (home / ".claude.json").read_text() == '{"which": "home"}'
+    assert (home / ".claude/claude.json").read_text() == '{"which": "state"}'
+
+
+def test_prepare_creates_the_state_directory_when_it_is_missing(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    ClaudeCodeHarness().prepare()
+
+    assert (tmp_path / ".claude").is_dir()

@@ -29,6 +29,10 @@ class PiHarness:
     def serves(self, vendor: str) -> bool:
         return True  # the general-purpose harness; anything unclaimed lands here
 
+    def prepare(self) -> None:
+        """Nothing to arrange: pi keeps everything under `state_path`, so
+        persisting that one directory persists all of it."""
+
     async def run(self, steps: list[AgentStep], log: logging.Logger) -> int:
         session_id: str | None = None
         for index, step in enumerate(steps):

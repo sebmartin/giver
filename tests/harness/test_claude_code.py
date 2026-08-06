@@ -1,4 +1,5 @@
 import logging
+import os
 from unittest.mock import patch
 
 import pytest
@@ -82,57 +83,42 @@ async def test_fails_on_nonzero_exit_despite_a_clean_stream(mock_proc):
 
 @pytest.fixture
 def home(tmp_path, monkeypatch):
-    """A home directory whose `~/.claude` is the mounted state directory."""
+    """A home directory, with no config location already chosen."""
     monkeypatch.setenv("HOME", str(tmp_path))
-    (tmp_path / ".claude").mkdir()
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
     return tmp_path
 
 
-def test_prepare_puts_the_config_inside_the_state_directory(home):
-    """`~/.claude.json` is a sibling of `~/.claude`, so persisting the state
-    directory alone keeps the credentials and loses the config — which is what
-    carries onboarding and the account identity."""
+def test_prepare_moves_the_config_into_the_state_directory(home):
+    """claude keeps `.claude.json` outside the directory it stores everything
+    else in, so persisting `state_path` alone keeps the credentials and loses
+    the onboarding and account identity that file carries."""
     ClaudeCodeHarness().prepare()
 
-    (home / ".claude.json").write_text('{"hasCompletedOnboarding": true}')
+    assert os.environ["CLAUDE_CONFIG_DIR"] == str(home / ".claude")
 
-    assert (home / ".claude/claude.json").read_text() == '{"hasCompletedOnboarding": true}'
+
+def test_prepare_states_a_path_it_resolves_rather_than_one_it_declares(home):
+    """`state_path` is the harness's own vocabulary; give'r decides where that
+    lands. Expanding it here keeps the container path out of the class."""
+    assert "~" in ClaudeCodeHarness.state_path
+
+    ClaudeCodeHarness().prepare()
+
+    assert "~" not in os.environ["CLAUDE_CONFIG_DIR"]
+
+
+def test_prepare_defers_to_a_config_location_already_chosen(home, monkeypatch):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/somewhere/deliberate")
+
+    ClaudeCodeHarness().prepare()
+
+    assert os.environ["CLAUDE_CONFIG_DIR"] == "/somewhere/deliberate"
 
 
 def test_prepare_is_idempotent(home):
     harness = ClaudeCodeHarness()
     harness.prepare()
-    (home / ".claude.json").write_text('{"kept": true}')
     harness.prepare()
 
-    assert (home / ".claude/claude.json").read_text() == '{"kept": true}'
-
-
-def test_prepare_adopts_a_config_written_before_the_link_existed(home):
-    (home / ".claude.json").write_text('{"oauthAccount": "someone"}')
-
-    ClaudeCodeHarness().prepare()
-
-    assert (home / ".claude.json").is_symlink()
-    assert (home / ".claude/claude.json").read_text() == '{"oauthAccount": "someone"}'
-
-
-def test_prepare_leaves_a_real_config_alone_when_the_state_directory_has_one(home):
-    """give'r is meant to run without a container too, where `~/.claude.json` is
-    someone's actual config. Two real files is not a case to resolve by
-    guessing — neither is destroyed."""
-    (home / ".claude.json").write_text('{"which": "home"}')
-    (home / ".claude/claude.json").write_text('{"which": "state"}')
-
-    ClaudeCodeHarness().prepare()
-
-    assert (home / ".claude.json").read_text() == '{"which": "home"}'
-    assert (home / ".claude/claude.json").read_text() == '{"which": "state"}'
-
-
-def test_prepare_creates_the_state_directory_when_it_is_missing(tmp_path, monkeypatch):
-    monkeypatch.setenv("HOME", str(tmp_path))
-
-    ClaudeCodeHarness().prepare()
-
-    assert (tmp_path / ".claude").is_dir()
+    assert os.environ["CLAUDE_CONFIG_DIR"] == str(home / ".claude")

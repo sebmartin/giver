@@ -1,7 +1,7 @@
 import asyncio
 import json
 import logging
-from contextlib import suppress
+import os
 from pathlib import Path
 
 from giver.harness.process import spawn
@@ -40,35 +40,24 @@ class ClaudeCodeHarness:
         return vendor in self._VENDORS
 
     def prepare(self) -> None:
-        """Bring `~/.claude.json` inside the state directory.
+        """Point claude's config at its own state directory.
 
-        claude splits its state in two: sessions and credentials live under
-        `~/.claude`, but the config file is `~/.claude.json` — a *sibling* of
-        that directory, not a file in it. Anything that persists `state_path`
-        alone therefore keeps the credentials and loses the config, and the
-        config is what carries `hasCompletedOnboarding` and the `oauthAccount`
-        identity — so the agent reads as logged out and re-runs onboarding even
-        though its token is right there. Linking the config into the state
-        directory means whatever backs `~/.claude` backs both.
+        claude keeps `.claude.json` — onboarding, the `oauthAccount` identity,
+        per-project trust — *outside* the directory it stores everything else
+        in. Persisting `state_path` alone therefore keeps the credentials and
+        loses the identity, and claude reads as logged out with a valid token
+        sitting right next to it. `CLAUDE_CONFIG_DIR` is claude's own answer to
+        this: it moves that file inside the directory.
 
-        Careful about what it displaces, because give'r is meant to run without
-        a container too, where `~/.claude.json` is someone's real config: an
-        existing file is moved in rather than dropped, and if both sides hold
-        one this leaves them alone rather than picking a winner.
+        Set here rather than declared in `env` because the value is an absolute
+        path. Where `state_path` lands is give'r's decision, not something this
+        class should be stating — and `~` only means anything in the environment
+        the harness actually runs in, which is this one. An explicit setting
+        from outside wins.
         """
-        link = Path("~/.claude.json").expanduser()
-        target = Path("~/.claude/claude.json").expanduser()
-        if link.is_symlink():
-            return
-        if link.exists():
-            if target.exists():
-                return
-            target.parent.mkdir(parents=True, exist_ok=True)
-            link.rename(target)
-        else:
-            target.parent.mkdir(parents=True, exist_ok=True)
-        with suppress(FileExistsError):  # parallel nodes prepare concurrently
-            link.symlink_to(target)
+        os.environ.setdefault(
+            "CLAUDE_CONFIG_DIR", str(Path(self.state_path).expanduser())
+        )
 
     async def run(self, steps: list[AgentStep], log: logging.Logger) -> int:
         session_id: str | None = None

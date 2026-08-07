@@ -14,10 +14,9 @@ So the image carries no user at all and this creates one, for whatever uid it
 is told, before dropping to it.
 
 With no `GIVER_UID` it execs unchanged, for the case where somebody else started
-the container — a CI job container has its own user, its own home and its own
-mounts, and has already done this job. That is checked rather than assumed,
-because the image give'r generates carries no user and no home, so running it
-without a uid lands as root in a `$HOME` that nothing ever created.
+the container: a CI job container has its own user, home and mounts, and has
+already done this job. It checks for that home first, because the image give'r
+generates has neither a user nor a home and would otherwise exec as root.
 """
 
 import grp
@@ -70,17 +69,14 @@ def main(argv: list[str] | None = None) -> None:
 def _require_a_home_already() -> None:
     """Refuse to exec into a container nobody has set up.
 
-    No `GIVER_UID` used to mean "somebody else started this, and has already
-    done this job". That is true of an image built with a `USER` and a home to
-    go with it, and false of the one give'r generates: it carries no user,
-    because a uid in an image only ever matches the machine that chose it, so
-    `docker run` on it lands as root in a `$HOME` that `useradd -m` never
-    created. Every harness resolves `~` from `$HOME`, so each would write its
-    credentials into a directory that is not there.
+    An unset `GIVER_UID` was taken to mean somebody else started this container
+    and has already done the setup. The image give'r generates carries no user,
+    so `docker run` on it lands as root with `$HOME` set to a directory that
+    `useradd -m` never created. Harnesses resolve `~` from `$HOME` and would
+    write their credentials into a path that does not exist.
 
-    Checking the home the bypass is claiming separates those two, which the
-    absence of an env var cannot: it catches the root case and the `--user`
-    case together, and a real CI container passes on the first stat.
+    Testing for the home covers that at any uid, including `docker run --user`,
+    and costs a container someone else set up one stat.
     """
     home = Path(os.environ.get("HOME", HOME))
     if home.is_dir() and os.access(home, os.W_OK):
@@ -165,10 +161,11 @@ def _take_ownership(uid: int, gid: int) -> None:
         # has no directory and needs none.
         if not state.exists():
             continue
-        # Mounting a volume at ~/.pi/agent makes Docker create ~/.pi on the way
-        # to it, owned by root — a directory in this user's own home that it
-        # does not own, waiting for the first harness to write beside its state
-        # rather than inside it.
+        # Docker creates ~/.pi on its way to mounting ~/.pi/agent and leaves it
+        # owned by root at 0755. No shipped harness writes anything there, so
+        # this is not fixing a known failure: it is keeping the home directory
+        # ordinary, since an account that cannot write inside its own home is
+        # the kind of thing the container is supposed to hide.
         for parent in _under_home(state):
             _own(parent, uid, gid)
         if state.stat().st_uid != uid:

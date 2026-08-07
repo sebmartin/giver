@@ -166,6 +166,17 @@ the container creates an account for it before dropping to it — so an image is
 portable, run output on a bind mount belongs to the person who will read it, and
 harnesses that refuse to run as root work.
 
+Running a generated image yourself means passing that uid yourself, since
+nothing else in the image will:
+
+```bash
+docker run -e GIVER_UID=$(id -u) -e GIVER_GID=$(id -g) \
+  -v "$PWD/runs:/runs" giver:dev-pi python -m giver.kernel workflow.yaml
+```
+
+Without it the container has no account and no home, and the entrypoint says so
+and exits rather than running the workflow as root.
+
 ## Workflow DSL
 
 ### Defaults
@@ -222,7 +233,7 @@ Everything resolvable is resolved when the workflow loads, so a typo'd model, an
 - **Agent nodes** — multi-step sessions delegated to a harness.
 - **Bash nodes** — deterministic steps: file prep, validation, shell commands.
 - **CLI** — host-side only; owns every Docker word. A harness declares `~/.pi/agent`; turning that into a volume, a container path and a line in a Dockerfile is the CLI's job, because a local no-container mode is planned.
-- **Entrypoint** (`giver/entrypoint.py`) — runs first in every container give'r starts, sets it up for the invoking user, then execs the command. Does nothing when `GIVER_UID` is unset, so a container someone else started is left alone.
+- **Entrypoint** (`giver/entrypoint.py`) — runs first in every container give'r starts, sets it up for the invoking user, then execs the command. Execs unchanged when `GIVER_UID` is unset and the container already has a writable home, so one someone else started is left alone.
 
 ## Status
 

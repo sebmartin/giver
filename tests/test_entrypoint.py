@@ -81,10 +81,23 @@ def test_execs_untouched_without_a_uid(container):
     """Someone else started it — a CI job container has its own user, home and
     mounts, and has already done all of this. Skipping the entrypoint has to be
     a no-op, or every such runtime becomes a special case."""
+    container.home.mkdir(parents=True)
+
     result = _drive(["python", "-m", "giver.kernel"], env={})
 
     assert result.execvp == call("python", ["python", "-m", "giver.kernel"])
     assert (result.shell, result.became) == ([], (None, None, None))
+
+
+def test_refuses_to_exec_into_a_container_with_no_home(container):
+    """The image give'r generates carries no user, so `docker run` on it with
+    no uid lands as root in a `$HOME` nothing created — and every harness reads
+    `~` from `$HOME`. An unset `GIVER_UID` cannot tell that apart from a real
+    CI container; the home it claims to have can."""
+    with pytest.raises(SystemExit) as exc:
+        _drive(["python", "-m", "giver.kernel"], env={})
+
+    assert exc.value.code == 1
 
 
 def test_refuses_to_drop_to_root(container):

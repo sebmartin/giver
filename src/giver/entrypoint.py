@@ -13,9 +13,11 @@ Docker has no facility for mapping one to another (`--userns` takes only
 So the image carries no user at all and this creates one, for whatever uid it
 is told, before dropping to it.
 
-Bypassing this is always safe: with no `GIVER_UID` it execs unchanged. That is
-the case where somebody else started the container — a CI job container has its
-own user, its own home and its own mounts, and has already done this job.
+With no `GIVER_UID` it execs unchanged, for the case where somebody else started
+the container — a CI job container has its own user, its own home and its own
+mounts, and has already done this job. That is checked rather than assumed,
+because the image give'r generates carries no user and no home, so running it
+without a uid lands as root in a `$HOME` that nothing ever created.
 """
 
 import grp
@@ -40,6 +42,7 @@ def main(argv: list[str] | None = None) -> None:
 
     requested = os.environ.get("GIVER_UID")
     if requested is None:
+        _require_a_home_already()
         os.execvp(argv[0], argv)
         return  # execvp replaces this process; returning is not control flow
 
@@ -62,6 +65,34 @@ def main(argv: list[str] | None = None) -> None:
     _take_ownership(uid, gid)
     _become(name, uid, gid)
     os.execvp(argv[0], argv)
+
+
+def _require_a_home_already() -> None:
+    """Refuse to exec into a container nobody has set up.
+
+    No `GIVER_UID` used to mean "somebody else started this, and has already
+    done this job". That is true of an image built with a `USER` and a home to
+    go with it, and false of the one give'r generates: it carries no user,
+    because a uid in an image only ever matches the machine that chose it, so
+    `docker run` on it lands as root in a `$HOME` that `useradd -m` never
+    created. Every harness resolves `~` from `$HOME`, so each would write its
+    credentials into a directory that is not there.
+
+    Checking the home the bypass is claiming separates those two, which the
+    absence of an env var cannot: it catches the root case and the `--user`
+    case together, and a real CI container passes on the first stat.
+    """
+    home = Path(os.environ.get("HOME", HOME))
+    if home.is_dir() and os.access(home, os.W_OK):
+        return
+    print(
+        f"error: no writable home at {home}, so this container has not been "
+        "set up for anyone. An image give'r generated carries no user; run it "
+        "with -e GIVER_UID=$(id -u) -e GIVER_GID=$(id -g) and this entrypoint "
+        "will make the account.",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
 
 
 def _ensure_account(uid: int, gid: int) -> str:

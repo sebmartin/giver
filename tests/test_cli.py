@@ -14,6 +14,7 @@ from giver.cli import (
     shell,
 )
 from giver.harness import CodexHarness, PiHarness
+from giver.image import source_fingerprint
 
 
 def test_container_name_includes_stem():
@@ -38,22 +39,25 @@ def _build(mock):
     return next(c for c in mock.call_args_list if "build" in c[0][0])
 
 
-def _mock_side_effects(image_harnesses="claude-code,codex,pi"):
+CURRENT = source_fingerprint(_PROJECT_ROOT)
+
+
+def _mock_side_effects(image_source=CURRENT, exit_code="0"):
     """Answer each docker call by what it asks for, so a test is not coupled to
     how many calls a run makes.
 
-    `image_harnesses` is the label on the local image; None means there is no
-    local image. The default carries everything, so a test about something else
-    never accidentally triggers a build.
+    `image_source` is the `giver.source` label on the image being asked about;
+    None means there is no such image. It defaults to the source actually in
+    the tree, so a test about something else never triggers a build.
     """
 
     def respond(cmd, *_, **__):
         if cmd[:3] == ["docker", "image", "inspect"]:
-            if image_harnesses is None:
+            if image_source is None:
                 return MagicMock(returncode=1, stdout="")
-            return MagicMock(returncode=0, stdout=f"{image_harnesses}\n")
+            return MagicMock(returncode=0, stdout=f"{image_source}\n")
         if cmd[:2] == ["docker", "wait"]:
-            return MagicMock(returncode=0, stdout="0\n")
+            return MagicMock(returncode=0, stdout=f"{exit_code}\n")
         return MagicMock(returncode=0)
 
     return respond
@@ -62,34 +66,40 @@ def _mock_side_effects(image_harnesses="claude-code,codex,pi"):
 # ── _ensure_image ─────────────────────────────────────────────────────────────
 
 
-def test_ensure_image_skips_build_when_the_image_already_carries_them():
+def test_ensure_image_skips_build_when_the_image_holds_this_source():
     with patch("giver.cli.subprocess.run") as mock:
-        mock.side_effect = _mock_side_effects("claude-code,pi")
-        _ensure_image([PiHarness()])
+        mock.side_effect = _mock_side_effects()
+        image = _ensure_image([PiHarness()])
 
+    assert image == "giver:dev-pi"
     assert not any("build" in c for c in _docker_calls(mock))
 
 
-def test_ensure_image_builds_when_a_named_harness_is_missing():
-    """Build-if-stale, not build-if-absent: a workflow that starts naming a
-    harness the image predates would otherwise die on a missing binary partway
-    through the run."""
+def test_ensure_image_rebuilds_when_the_source_changed():
+    """A version does not move while someone is editing, so it cannot answer
+    "is the give'r in this image the give'r I am running". Without this you run
+    yesterday's kernel against today's workflow and nothing says so."""
     with patch("giver.cli.subprocess.run") as mock:
-        mock.side_effect = _mock_side_effects("pi")
-        _ensure_image([CodexHarness()])
-
-    assert 'LABEL giver.harnesses="codex,pi"' in _build(mock)[1]["input"]
-
-
-def test_ensure_image_keeps_what_the_image_already_carried():
-    """One tag serves every workflow on this machine. Rebuilding to exactly
-    what this run needs would drop what the last one needed, and alternating
-    between two workflows would rebuild on every invocation."""
-    with patch("giver.cli.subprocess.run") as mock:
-        mock.side_effect = _mock_side_effects("claude-code")
+        mock.side_effect = _mock_side_effects("stale0000000")
         _ensure_image([PiHarness()])
 
-    assert 'LABEL giver.harnesses="claude-code,pi"' in _build(mock)[1]["input"]
+    assert _build(mock)[0][0][:5] == ["docker", "build", "-t", "giver:dev-pi", "-f"]
+
+
+def test_ensure_image_gives_each_harness_set_its_own_tag():
+    """Not one image that grows. Contents would then be a function of what this
+    machine happens to have run, so two people running the same workflow get
+    different images — each a combination of harnesses nobody chose or tested."""
+    with patch("giver.cli.subprocess.run") as mock:
+        mock.side_effect = _mock_side_effects()
+        tags = [
+            _ensure_image([PiHarness()]),
+            _ensure_image([CodexHarness()]),
+            _ensure_image([PiHarness(), CodexHarness()]),
+            _ensure_image(),
+        ]
+
+    assert tags == ["giver:dev-pi", "giver:dev-codex", "giver:dev-codex_pi", "giver:dev-base"]
 
 
 def test_ensure_image_feeds_the_dockerfile_in_rather_than_reading_one():
@@ -101,7 +111,7 @@ def test_ensure_image_feeds_the_dockerfile_in_rather_than_reading_one():
         _ensure_image([PiHarness()])
 
     argv, kwargs = _build(mock)[0][0], _build(mock)[1]
-    assert argv == ["docker", "build", "-t", "giver:latest", "-f", "-", str(_PROJECT_ROOT)]
+    assert argv == ["docker", "build", "-t", "giver:dev-pi", "-f", "-", str(_PROJECT_ROOT)]
     assert kwargs["input"].startswith("FROM python:3.13-slim")
 
 
@@ -132,7 +142,7 @@ def test_run_starts_detached_named_container(tmp_path):
     assert "-d" in start_cmd
     assert f"{wf.resolve()}:/workflow.yaml:ro" in start_cmd
     assert f"{runs_dir}:/runs" in start_cmd
-    assert "giver:latest" in start_cmd
+    assert "giver:dev-base" in start_cmd
 
 
 def test_run_streams_logs_then_waits(tmp_path):
@@ -165,12 +175,7 @@ def test_run_returns_workflow_exit_code(tmp_path):
     wf.write_text("name: test\nnodes: []")
 
     with patch("giver.cli.subprocess.run") as mock:
-        mock.side_effect = [
-            MagicMock(returncode=0),  # docker image inspect
-            MagicMock(returncode=0),  # docker run -d
-            MagicMock(returncode=0),  # docker logs -f
-            MagicMock(returncode=0, stdout="1\n"),  # docker wait → exit 1
-        ]
+        mock.side_effect = _mock_side_effects(exit_code="1")
         assert run(wf, runs_dir=tmp_path / "runs") == 1
 
 
@@ -272,7 +277,7 @@ def test_shell_pi_drops_into_bash_with_pi_volume():
     assert "PI_OAUTH_CALLBACK_HOST=0.0.0.0" in cmd
     assert "giver-pi-state:/home/giver/.pi/agent" in cmd  # writable — login persists to the volume
     assert cmd[-8:] == [
-        "giver:latest",
+        "giver:dev-pi",
         "python", "-m", "giver.harness", "--harness", "pi", "--", "bash",
     ]
 
@@ -294,9 +299,9 @@ def test_shell_enters_through_giver_so_the_harness_is_prepared(tmp_path):
         shell("claude-code")
 
     cmd = _docker_run(mock, "-it")
-    tail = cmd[cmd.index("giver:latest"):]
+    tail = cmd[cmd.index("giver:dev-claude-code"):]
     assert tail == [
-        "giver:latest",
+        "giver:dev-claude-code",
         "python", "-m", "giver.harness", "--harness", "claude-code", "--", "bash",
     ]
 
@@ -310,7 +315,7 @@ def test_shell_no_harness_still_reaches_bash():
     assert cmd == [
         "docker", "run", "--rm", "-it",
         "-e", f"GIVER_UID={os.getuid()}", "-e", f"GIVER_GID={os.getgid()}",
-        "giver:latest",
+        "giver:dev-base",
         "python", "-m", "giver.harness", "--", "bash",
     ]
 
@@ -330,8 +335,8 @@ def test_chat_launches_the_harness_repl_with_the_same_provisioning():
     cmd = _docker_run(mock, "-it")
     assert "53692:53692" in cmd  # same declared infra as `shell pi`
     assert "giver-pi-state:/home/giver/.pi/agent" in cmd
-    assert cmd[cmd.index("giver:latest"):] == [
-        "giver:latest",
+    assert cmd[cmd.index("giver:dev-pi"):] == [
+        "giver:dev-pi",
         "python", "-m", "giver.harness", "--harness", "pi", "--", "pi",
     ]
 

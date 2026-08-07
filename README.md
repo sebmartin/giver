@@ -108,9 +108,21 @@ runtime with pi in it and nothing else, not even node. give'r generates the
 Dockerfile from what each harness declares, so adding a harness is still one
 class and no file lists them.
 
-`giver run` builds one when what it needs isn't there, adding to what the image
-already carries rather than replacing it. `LABEL giver.harnesses` — not the tag
-— records the contents, because whoever builds owns the tag.
+Each harness set is its own image — `giver:dev-pi`, `giver:dev-claude-code_pi` —
+rather than one that grows to cover everything you've ever run. An image whose
+contents depend on your run history is a combination nobody chose and nobody
+tested, and it would differ between two people running the same workflow. The
+expensive layers are shared, and node is installed before any harness, so every
+npm-based image shares that one too.
+
+`giver run` builds the image for what a workflow names, if it isn't already
+there. `LABEL giver.harnesses` records the contents and `giver.source` records
+which give'r is inside — a version doesn't move while you're editing, so the
+fingerprint is what stops a run using yesterday's kernel:
+
+```bash
+docker images --filter label=giver.harnesses
+```
 
 `giver dockerfile` prints the file for anyone who wants to build their own: CI
 builds it once and runs inside it. It needs `--dev [path]` while `giver` is an

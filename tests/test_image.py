@@ -3,8 +3,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from giver.image import render
 from giver.harness import NODE, ClaudeCodeHarness, PiHarness
+from giver.image import render, source_fingerprint, tag
 
 
 def _harness(name, install, toolchain=None):
@@ -115,6 +115,57 @@ def test_work_happens_somewhere_other_than_giver_s_own_source(checkout):
 
     assert "ENV HOME=/home/giver" in lines
     assert lines.index("WORKDIR /work") > lines.index("WORKDIR /app")
+
+
+# ── identity ──────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "harnesses,expected",
+    [
+        ([], "giver:dev-base"),
+        ([PiHarness()], "giver:dev-pi"),
+        ([ClaudeCodeHarness(), PiHarness()], "giver:dev-claude-code_pi"),
+        ([PiHarness(), ClaudeCodeHarness()], "giver:dev-claude-code_pi"),
+    ],
+)
+def test_tag_names_the_harness_set(harnesses, expected):
+    """Distinct sets are distinct images. One image grown to cover everything a
+    machine has run would be a combination nobody chose and nobody tested, and
+    would differ between two people running the same workflow."""
+    assert tag(harnesses, dev=Path(".")) == expected
+
+
+def test_tag_separates_a_checkout_from_a_release(checkout):
+    """Same harnesses, different give'r — sharing a tag would silently reuse
+    one for the other."""
+    assert tag([PiHarness()], dev=checkout) != tag([PiHarness()])
+
+
+def test_a_dev_image_records_the_source_it_was_built_from(checkout):
+    """A version does not move while someone edits, so it cannot answer whether
+    the give'r in an image is the give'r being run."""
+    text = render([PiHarness()], dev=checkout)
+
+    assert f'LABEL giver.source="{source_fingerprint(checkout)}"' in text
+
+
+def test_the_fingerprint_follows_the_source(checkout):
+    before = source_fingerprint(checkout)
+    (checkout / "src").mkdir()
+    (checkout / "src" / "thing.py").write_text("x = 1")
+
+    assert source_fingerprint(checkout) != before
+
+
+def test_the_fingerprint_ignores_what_the_image_never_sees(checkout):
+    """Bytecode is excluded from the build context, so hashing it would rebuild
+    the image every time something imported give'r."""
+    (checkout / "src" / "__pycache__").mkdir(parents=True)
+    before = source_fingerprint(checkout)
+    (checkout / "src" / "__pycache__" / "m.cpython-313.pyc").write_bytes(b"\x00")
+
+    assert source_fingerprint(checkout) == before
 
 
 # ── where give'r comes from ───────────────────────────────────────────────────

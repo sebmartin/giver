@@ -9,7 +9,7 @@ from pathlib import Path
 
 from giver.entrypoint import HOME
 from giver.harness import HARNESS_NAMES, HARNESSES, Harness, harness_by_name
-from giver.image import LABEL_KEY, render
+from giver.image import SOURCE_LABEL, render, source_fingerprint, tag
 from giver.kernel.nodes.agent import AgentNode
 from giver.kernel.workflow import Workflow
 
@@ -20,64 +20,62 @@ def _container_name(workflow_stem: str) -> str:
 
 _PROJECT_ROOT = Path(__file__).parents[2]
 
-IMAGE = "giver:latest"
 
+def _label(image: str, key: str) -> str | None:
+    """One label off a local image, or None if there is no such image.
 
-def _image_harnesses() -> set[str] | None:
-    """What the local image carries, or None if there isn't one.
-
-    Read from the label rather than the tag: a tag says nothing about contents,
-    and this is answerable before any container starts.
+    Answerable before any container starts, which is what keeps this a
+    preflight rather than something a run discovers halfway through.
     """
     result = subprocess.run(
-        ["docker", "image", "inspect", IMAGE, "--format", f"{{{{index .Config.Labels \"{LABEL_KEY}\"}}}}"],
+        ["docker", "image", "inspect", image, "--format", f'{{{{index .Config.Labels "{key}"}}}}'],
         capture_output=True,
         text=True,
     )
-    if result.returncode != 0:
-        return None
-    return {name for name in result.stdout.strip().split(",") if name}
+    return None if result.returncode != 0 else result.stdout.strip()
 
 
-def _ensure_image(harnesses: Iterable[Harness] = ()) -> None:
-    """A local image carrying at least these harnesses.
+def _ensure_image(harnesses: Iterable[Harness] = ()) -> str:
+    """A local image carrying exactly these harnesses. Returns its tag.
 
-    Build-if-stale rather than build-if-absent: a workflow that starts naming a
-    harness the image predates would otherwise run against an image without it
-    and fail on a missing binary, deep inside the run.
+    Exactly, not at least. Growing one image to cover everything this machine
+    has ever run would make its contents a function of that history rather than
+    of any workflow — so two people running the same workflow would get
+    different images, and every one of them a combination of harnesses nobody
+    chose and nobody tested. Distinct sets get distinct tags instead; the
+    expensive layers are shared, and node is installed before any harness so
+    every npm-based image shares that one too.
+
+    Within a tag, a rebuild is still needed when the give'r inside it has
+    changed — the version does not move while someone is editing the source, so
+    a fingerprint of it decides.
     """
-    needed = {harness.name for harness in harnesses}
-    carried = _image_harnesses()
-    if carried is not None and needed <= carried:
-        return
+    try:
+        dockerfile_text = render(harnesses, dev=_PROJECT_ROOT)
+        fingerprint = source_fingerprint(_PROJECT_ROOT)
+    except ValueError as e:
+        print(f"error: {e}", file=sys.stderr)
+        sys.exit(1)
 
-    # Accrete rather than replace. The image is a function of the workflow, but
-    # one tag serves every workflow on this machine — rebuilding to exactly what
-    # this run needs would drop what the last one needed, and alternating
-    # between two workflows would rebuild on every invocation.
-    wanted = needed | (carried or set())
+    image = tag(harnesses, dev=_PROJECT_ROOT)
+    if _label(image, SOURCE_LABEL) == fingerprint:
+        return image
 
     if subprocess.run(["docker", "info"], capture_output=True).returncode != 0:
         print("error: Docker is not running", file=sys.stderr)
-        sys.exit(1)
-    try:
-        dockerfile_text = render(
-            [harness_by_name(name) for name in sorted(wanted)], dev=_PROJECT_ROOT
-        )
-    except ValueError as e:
-        print(f"error: {e}", file=sys.stderr)
         sys.exit(1)
     # `-f -` reads the Dockerfile from stdin while still taking a build context
     # from the path — `docker build -` would send the context itself and leave
     # the COPY lines nothing to copy.
     result = subprocess.run(
-        ["docker", "build", "-t", IMAGE, "-f", "-", str(_PROJECT_ROOT)],
+        ["docker", "build", "-t", image, "-f", "-", str(_PROJECT_ROOT)],
         input=dockerfile_text,
         text=True,
     )
     if result.returncode != 0:
         print("error: image build failed", file=sys.stderr)
         sys.exit(1)
+    return image
 
 
 def _user_args() -> list[str]:
@@ -146,7 +144,7 @@ def _harnesses_for(*workflow_paths: Path) -> list[Harness]:
 
 
 def _run_container(
-    workflow_abs: Path, runs_dir: Path, name: str, harnesses: list[Harness]
+    workflow_abs: Path, runs_dir: Path, name: str, harnesses: list[Harness], image: str
 ) -> None:
     cmd = [
         "docker", "run", "-d",
@@ -162,7 +160,7 @@ def _run_container(
     # token refreshes.
     for harness in harnesses:
         cmd += _harness_args(harness, interactive=False)
-    cmd += [IMAGE, "python", "-m", "giver.kernel", "/workflow.yaml"]
+    cmd += [image, "python", "-m", "giver.kernel", "/workflow.yaml"]
     subprocess.run(cmd)
 
 
@@ -183,7 +181,7 @@ def _interactive(harness_name: str | None, entrypoint: list[str]) -> int:
             print(f"error: {e}", file=sys.stderr)
             return 1
 
-    _ensure_image(harnesses)
+    image = _ensure_image(harnesses)
     cmd = ["docker", "run", "--rm", "-it", *_user_args()]
     prepare: list[str] = []
     for harness in harnesses:
@@ -193,7 +191,7 @@ def _interactive(harness_name: str | None, entrypoint: list[str]) -> int:
     # makes the container a sane environment for this uid, and these are the
     # paths where a first-pass login is written — the last place that should be
     # skipped.
-    cmd += [IMAGE, "python", "-m", "giver.harness", *prepare, "--", *entrypoint]
+    cmd += [image, "python", "-m", "giver.harness", *prepare, "--", *entrypoint]
     return subprocess.run(cmd).returncode
 
 
@@ -229,8 +227,8 @@ def run(workflow_path: Path, runs_dir: Path | None = None, detach: bool = False)
     _log(runs_dir, f"start container={name} workflow={workflow_abs} at {datetime.now(timezone.utc).isoformat()}")
 
     harnesses = _harnesses_for(workflow_abs)
-    _ensure_image(harnesses)
-    _run_container(workflow_abs, runs_dir, name, harnesses)
+    image = _ensure_image(harnesses)
+    _run_container(workflow_abs, runs_dir, name, harnesses, image)
 
     if detach:
         print(name)

@@ -73,6 +73,40 @@ def _container_path(harness: Harness) -> str:
     return f"{_CONTAINER_HOME}/" + harness.state_path.removeprefix("~/")
 
 
+def _ensure_state_volume(harness: Harness) -> None:
+    """Create a harness's state volume owned by the user that will use it.
+
+    Docker creates a volume for a path the image does not carry as root, and
+    the container is not root — so a volume left to appear on its own is one
+    the harness cannot write, and a login through it is lost when the container
+    exits. Only the first use pays for this; after that the volume exists.
+
+    Ownership is decided here for the same reason the volume's name and mount
+    point are: it is a fact about how give'r runs a container, not about the
+    harness, and the uid is not known until someone runs `giver`.
+    """
+    volume = _volume(harness)
+    exists = subprocess.run(["docker", "volume", "inspect", volume], capture_output=True)
+    if exists.returncode == 0:
+        return
+    created = subprocess.run(
+        [
+            "docker", "run", "--rm", "--user", "0",
+            "-v", f"{volume}:/state",
+            "--entrypoint", "chown", "giver:latest",
+            f"{os.getuid()}:{os.getgid()}", "/state",
+        ],
+        capture_output=True,
+    )
+    if created.returncode != 0:
+        print(
+            f"error: could not create state volume {volume}: "
+            f"{created.stderr.decode().strip()}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+
 def _harness_args(harness: Harness, interactive: bool) -> list[str]:
     """Docker arguments a harness needs: its environment, its state volume, and
     — only when someone will interact with it — the ports its login flow listens
@@ -116,6 +150,7 @@ def _run_container(workflow_abs: Path, runs_dir: Path, name: str) -> None:
     # write session transcripts as they work and rewrite credential files when a
     # token refreshes.
     for harness in _harnesses_for(workflow_abs):
+        _ensure_state_volume(harness)
         cmd += _harness_args(harness, interactive=False)
     cmd += ["giver:latest", "/workflow.yaml"]
     subprocess.run(cmd)
@@ -139,6 +174,7 @@ def _interactive(harness_name: str | None, entrypoint: list[str]) -> int:
         except ValueError as e:
             print(f"error: {e}", file=sys.stderr)
             return 1
+        _ensure_state_volume(harness)
         cmd += _harness_args(harness, interactive=True)
         prepare = ["--harness", harness.name]
     cmd += ["--entrypoint", "python", "giver:latest"]

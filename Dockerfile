@@ -19,17 +19,13 @@ RUN pip install .
 # root plus no prompts is a wider blast radius than either alone — claude-code
 # refuses the combination outright. The container is still the isolation
 # boundary; this just stops it being root inside its own box.
-RUN useradd --create-home --uid 1000 giver
+# The home directory is traversable by anyone, because the uid that will use it
+# is not known here — `giver run` runs the container as the user who invoked it,
+# so that the run output it writes to a bind mount belongs to the person who
+# will read it. Everything a harness stores lives on a volume mounted beneath
+# this directory, owned by that user; the directory itself is only a path to
+# walk through.
+RUN useradd --create-home --uid 1000 giver && chmod 0755 /home/giver
 USER giver
-
-# Each harness's state directory, so that a state volume mounted over one is
-# seeded writable: Docker copies the image's ownership and mode onto a new named
-# volume, and a root-owned mount point would be unusable by the user that has to
-# log in through it. Mode 0777 because `giver run` runs the container as the
-# uid of whoever invoked it, which is any number at all — the container holds a
-# single user either way. Written as `~` because where a harness's state lands
-# is give'r's decision, not the harness's.
-RUN mkdir -p ~/.pi/agent ~/.claude ~/.codex && \
-    chmod 0777 ~ ~/.pi ~/.pi/agent ~/.claude ~/.codex
 
 ENTRYPOINT ["python", "-m", "giver.kernel"]

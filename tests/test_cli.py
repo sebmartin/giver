@@ -22,13 +22,27 @@ def _docker_calls(mock):
     return [c[0][0] for c in mock.call_args_list]
 
 
-def _mock_side_effects():
-    return [
-        MagicMock(returncode=0),  # docker image inspect (image exists)
-        MagicMock(returncode=0),  # docker run -d
-        MagicMock(returncode=0),  # docker logs -f
-        MagicMock(returncode=0, stdout="0\n"),  # docker wait
-    ]
+def _docker_run(mock, flag):
+    """The `docker run` carrying `flag` — `-d` starts a workflow container,
+    `-it` an interactive one. Picked by what it is rather than by position, so
+    the provisioning calls around it don't shift an index."""
+    return next(
+        c for c in _docker_calls(mock) if c[:2] == ["docker", "run"] and flag in c
+    )
+
+
+def _mock_side_effects(volume_exists=True):
+    """Answer each docker call by what it asks for, so a test is not coupled to
+    how many calls a run makes."""
+
+    def respond(cmd, *_, **__):
+        if cmd[:3] == ["docker", "volume", "inspect"]:
+            return MagicMock(returncode=0 if volume_exists else 1)
+        if cmd[:2] == ["docker", "wait"]:
+            return MagicMock(returncode=0, stdout="0\n")
+        return MagicMock(returncode=0)
+
+    return respond
 
 
 # ── _ensure_image ─────────────────────────────────────────────────────────────
@@ -98,7 +112,7 @@ def test_run_starts_detached_named_container(tmp_path):
         mock.side_effect = _mock_side_effects()
         run(wf, runs_dir=runs_dir)
 
-    start_cmd = _docker_calls(mock)[1]  # index 1: after inspect
+    start_cmd = _docker_run(mock, "-d")
     assert "-d" in start_cmd
     assert f"{wf.resolve()}:/workflow.yaml:ro" in start_cmd
     assert f"{runs_dir}:/runs" in start_cmd
@@ -178,7 +192,7 @@ def _start_cmd(wf, tmp_path):
     with patch("giver.cli.subprocess.run") as mock:
         mock.side_effect = _mock_side_effects()
         run(wf, runs_dir=tmp_path / "runs")
-    return _docker_calls(mock)[1]
+    return _docker_run(mock, "-d")
 
 
 def test_run_mounts_harness_state_volumes_writable(tmp_path):
@@ -218,6 +232,33 @@ def test_run_runs_as_the_host_user(tmp_path):
     assert "HOME=/home/giver" in cmd  # a uid with no passwd entry has none
 
 
+def test_run_creates_a_missing_state_volume_owned_by_the_host_user(tmp_path):
+    """Docker creates a volume for a path the image does not carry as root, and
+    the container is not root — so an unprovisioned volume is one the harness
+    cannot write, and the login it holds could never have been saved."""
+    with patch("giver.cli.subprocess.run") as mock:
+        mock.side_effect = _mock_side_effects(volume_exists=False)
+        run(_agent_workflow(tmp_path, "pi"), runs_dir=tmp_path / "runs")
+
+    chown = next(c for c in _docker_calls(mock) if "chown" in c)
+    assert chown == [
+        "docker", "run", "--rm", "--user", "0",
+        "-v", "giver-pi-state:/state",
+        "--entrypoint", "chown", "giver:latest",
+        f"{os.getuid()}:{os.getgid()}", "/state",
+    ]
+
+
+def test_run_leaves_an_existing_state_volume_alone(tmp_path):
+    """Only the first use pays for provisioning — and re-chowning a volume
+    would fight any ownership it has already settled on."""
+    with patch("giver.cli.subprocess.run") as mock:
+        mock.side_effect = _mock_side_effects(volume_exists=True)
+        run(_agent_workflow(tmp_path, "pi"), runs_dir=tmp_path / "runs")
+
+    assert not any("chown" in c for c in _docker_calls(mock))
+
+
 def test_run_applies_harness_environment_but_publishes_no_ports(tmp_path):
     """A run needs pi's environment, but nothing is there to complete an OAuth
     callback — logging in happens beforehand via `giver shell`."""
@@ -245,7 +286,7 @@ def test_shell_pi_drops_into_bash_with_pi_volume():
     with patch("giver.cli.subprocess.run", return_value=MagicMock(returncode=0)) as mock:
         shell("pi")
 
-    cmd = _docker_calls(mock)[1]
+    cmd = _docker_run(mock, "-it")
     assert "--rm" in cmd and "-it" in cmd
     assert "53692:53692" in cmd
     assert "PI_OAUTH_CALLBACK_HOST=0.0.0.0" in cmd
@@ -260,7 +301,7 @@ def test_shell_claude_drops_into_bash_with_claude_volume():
     with patch("giver.cli.subprocess.run", return_value=MagicMock(returncode=0)) as mock:
         shell("claude-code")
 
-    cmd = _docker_calls(mock)[1]
+    cmd = _docker_run(mock, "-it")
     assert "giver-claude-code-state:/home/giver/.claude" in cmd
     assert cmd[-1] == "bash"
 
@@ -272,7 +313,7 @@ def test_shell_enters_through_giver_so_the_harness_is_prepared(tmp_path):
     with patch("giver.cli.subprocess.run", return_value=MagicMock(returncode=0)) as mock:
         shell("claude-code")
 
-    cmd = _docker_calls(mock)[1]
+    cmd = _docker_run(mock, "-it")
     tail = cmd[cmd.index("--entrypoint"):]
     assert tail == [
         "--entrypoint", "python", "giver:latest",
@@ -285,7 +326,7 @@ def test_shell_no_harness_still_reaches_bash():
     with patch("giver.cli.subprocess.run", return_value=MagicMock(returncode=0)) as mock:
         shell()
 
-    cmd = _docker_calls(mock)[1]
+    cmd = _docker_run(mock, "-it")
     assert cmd == [
         "docker", "run", "--rm", "-it",
         "--user", f"{os.getuid()}:{os.getgid()}",
@@ -307,7 +348,7 @@ def test_chat_launches_the_harness_repl_with_the_same_provisioning():
     with patch("giver.cli.subprocess.run", return_value=MagicMock(returncode=0)) as mock:
         chat("pi")
 
-    cmd = _docker_calls(mock)[1]
+    cmd = _docker_run(mock, "-it")
     assert "53692:53692" in cmd  # same declared infra as `shell pi`
     assert "giver-pi-state:/home/giver/.pi/agent" in cmd
     assert cmd[cmd.index("--entrypoint"):] == [

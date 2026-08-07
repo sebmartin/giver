@@ -37,9 +37,35 @@ giver run workflow.yaml
 
 ## Harnesses
 
-A **harness** is a coding-agent CLI that give'r drives — `pi`, `claude-code` or `codex`. give'r orchestrates; the harness does the agent work. One class describes each one: where it keeps credentials and sessions, what environment and ports it needs, how it gets installed and what that install needs first, its REPL command, which vendors it can serve, and how to run a node's steps.
+A **harness** is a coding-agent CLI that give'r drives — `pi`, `claude-code` or `codex`. give'r orchestrates; the harness does the agent work.
 
-Nothing in give'r branches on which harness is running. Anything harness-specific is expressed through a mechanism every harness has, so adding one is a single class.
+**give'r is an orchestrator. Bring your own harness.** The three it ships are conveniences, not the product. Agent CLIs are being rewritten faster than any workflow engine can track, and a tool welded to one of them inherits every decision its vendor makes — so give'r is built to be wrong about which harness you want.
+
+That's a constraint on give'r's own code, not a promise in a README: **nothing in give'r branches on which harness is running.** No `if harness == "claude"` anywhere, no privileged path for the ones that ship. Anything harness-specific is expressed through a mechanism *every* harness has, which means the shipped three are the first users of those mechanisms rather than exceptions to them. When pi needed a callback port it became `ports`; when claude-code kept config outside the directory give'r mounts it became `prepare()`. Your harness gets the same hooks, because they only exist in that form because a shipped one needed them.
+
+### Bring your own
+
+One class, and most of it is declaration:
+
+```python
+class MyHarness:
+    name = "mine"
+    state_path = "~/.mine"                    # credentials and sessions
+    env = {}                                  # what it needs to function at all
+    ports = ()                                # only its interactive login
+    repl_cmd = ("mine",)
+    install = "npm install -g my-agent"       # becomes a RUN line
+    toolchain = NODE                          # what that install needs first
+    forks_on_resume = True                    # can it branch a session?
+
+    def serves(self, vendor): return vendor == "acme"
+    def prepare(self): ...                    # arrange anything else, in place
+    async def run(self, steps, log): ...      # do the work, return an exit status
+```
+
+Register it and you're done. `install` and `toolchain` mean generated images pick it up with no Dockerfile to edit; `state_path` means it gets a persisted volume without naming a container path; `run` is the only part that's real work.
+
+Note what `run` is *not*: a subprocess contract. It takes steps, streams to the log, returns a status. All three shipped harnesses shell out, but nothing in the interface assumes it — a harness that called a library in-process satisfies the same contract.
 
 **`pi` is the default and the batteries-included path** — it serves any vendor by API key and needs no configuration to work. Name a different harness when you want one:
 
@@ -91,7 +117,7 @@ Missing credentials surface as that harness's own "not logged in" error on first
 ## Usage
 
 ```bash
-giver run workflow.yaml              # builds an image for it, if there isn't one
+giver run workflow.yaml              # builds an image for it if there isn't a current one
 giver run --detach workflow.yaml     # prints the container name, exits
 giver cancel giver-my-workflow-1234567890
 
@@ -103,10 +129,10 @@ giver dockerfile workflow.yaml --dev # print the Dockerfile; build it yourself
 
 ## Images
 
-An image carries exactly the harnesses its workflows name — a pi workflow gets a
-runtime with pi in it and nothing else, not even node. give'r generates the
-Dockerfile from what each harness declares, so adding a harness is still one
-class and no file lists them.
+An image carries exactly the harnesses its workflows name, and what those need to
+run — a pi workflow gets pi and the node it runs on; a workflow of nothing but
+bash nodes gets neither. give'r generates the Dockerfile from what each harness
+declares, so adding a harness is still one class and no file lists them.
 
 Each harness set is its own image — `giver:dev-pi`, `giver:dev-claude-code_pi` —
 rather than one that grows to cover everything you've ever run. An image whose
@@ -124,10 +150,11 @@ fingerprint is what stops a run using yesterday's kernel:
 docker images --filter label=giver.harnesses
 ```
 
-`giver dockerfile` prints the file for anyone who wants to build their own: CI
-builds it once and runs inside it. It needs `--dev [path]` while `giver` is an
-unregistered name on PyPI, since a generated file that installed it would run
-whoever claims the name inside the container holding every credential.
+`giver dockerfile` prints the file for anyone who wants to build their own image
+— CI building one per pipeline, or a runtime you publish. give'r never builds for
+anyone but itself. It needs `--dev [path]` while `giver` is an unregistered name
+on PyPI, since a generated file that installed it would run whoever claims the
+name inside the container holding every credential.
 
 The image bakes in no user. `giver run` passes the uid it was invoked as, and
 the container creates an account for it before dropping to it — so an image is

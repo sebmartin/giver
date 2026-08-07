@@ -44,7 +44,14 @@ uv run pytest -v     # verbose
 - **User-visible means**: a command or flag added, removed or changed; a changed default; how images are built, tagged or labelled; what the container looks like from inside; a field on the harness Protocol; a `Status` box that just became true.
 - **Never document what isn't built.** A decided-but-unimplemented design belongs in `Status` as an unchecked box, never in prose that reads as current. Claiming "CI builds the image once and runs inside it" while `giver run` still shells out to `docker` is a lie a reader only discovers by trying it.
 - **Verify each claim against the code, not against memory.** Documentation written from what you intended rather than what shipped is how the README came to say a pi image contains no node, when pi is an npm package and every pi image carries one.
-- **Sell the load-bearing ideas, don't just state them.** "Bring your own harness" is the reason the harness layer is shaped the way it is; a reader who skims past one flat sentence about it has missed what give'r is.
+- **Explain the load-bearing ideas, don't just assert them.** "Bring your own harness" is why the harness layer is shaped the way it is, so say what it lets a reader do and how. Explaining is showing the interface and what each field buys; it is not writing a pitch.
+- **Write documentation, not copy.** Say what a thing does, when you would use it, and what it costs. Ordinary connective sentences are fine and most sentences should be ordinary. Specific banned habits, all of which showed up in this README:
+  - "X, not Y" antithesis for emphasis — *"the three it ships are conveniences, not the product"*
+  - paradox or reversal as a punchline — *"give'r is built to be wrong about which harness you want"*
+  - escalating stakes to make a design choice sound momentous — *"inherits every decision its vendor makes"*
+  - an em-dash pivot into a summarising flourish at the end of a paragraph
+  - making every sentence quotable, so there is no plain prose between the claims
+- **Two tests before a sentence stays.** Could it appear in a man page? Can the reader do something differently having read it? A sentence that is memorable but actionless is decoration standing where a fact belongs.
 
 ## Testing
 

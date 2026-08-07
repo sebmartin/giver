@@ -39,13 +39,15 @@ giver run workflow.yaml
 
 A **harness** is a coding-agent CLI that give'r drives — `pi`, `claude-code` or `codex`. give'r orchestrates; the harness does the agent work.
 
-**give'r is an orchestrator. Bring your own harness.** The three it ships are conveniences, not the product. Agent CLIs are being rewritten faster than any workflow engine can track, and a tool welded to one of them inherits every decision its vendor makes — so give'r is built to be wrong about which harness you want.
+give'r ships three harnesses, but it is not tied to them. No code in give'r branches on which harness is running — there is no `if harness == "claude"` anywhere, and the three that ship use the same interface a harness you write would.
 
-That's a constraint on give'r's own code, not a promise in a README: **nothing in give'r branches on which harness is running.** No `if harness == "claude"` anywhere, no privileged path for the ones that ship. Anything harness-specific is expressed through a mechanism *every* harness has, which means the shipped three are the first users of those mechanisms rather than exceptions to them. When pi needed a callback port it became `ports`; when claude-code kept config outside the directory give'r mounts it became `prepare()`. Your harness gets the same hooks, because they only exist in that form because a shipped one needed them.
+The hooks in that interface exist because a shipped harness needed one. `ports` is there because pi's login runs a local OAuth callback. `prepare()` is there because claude-code keeps its config outside the directory give'r mounts, so something has to reconcile that before it runs. A harness with a similar problem uses the same hook.
 
-### Bring your own
+This matters if you use an agent CLI give'r doesn't ship, or if the one you use changes: the workflow engine and the agent tooling can move independently.
 
-One class, and most of it is declaration:
+### Writing a harness
+
+One class, most of it declaration:
 
 ```python
 class MyHarness:
@@ -63,9 +65,9 @@ class MyHarness:
     async def run(self, steps, log): ...      # do the work, return an exit status
 ```
 
-Register it and you're done. `install` and `toolchain` mean generated images pick it up with no Dockerfile to edit; `state_path` means it gets a persisted volume without naming a container path; `run` is the only part that's real work.
+Register it in `giver/harness/registry.py`. `install` and `toolchain` get it into generated images without editing a Dockerfile, and `state_path` gets it a persisted volume without naming a container path. `run` is the only part with substantial work in it: parsing the CLI's event stream to find the session id and whether the step succeeded.
 
-Note what `run` is *not*: a subprocess contract. It takes steps, streams to the log, returns a status. All three shipped harnesses shell out, but nothing in the interface assumes it — a harness that called a library in-process satisfies the same contract.
+`run` takes a list of steps, streams output to the log, and returns an exit status. The three shipped harnesses do that by running a subprocess, but the interface does not require one — a harness calling a library in-process works the same way.
 
 **`pi` is the default and the batteries-included path** — it serves any vendor by API key and needs no configuration to work. Name a different harness when you want one:
 
@@ -134,17 +136,19 @@ run — a pi workflow gets pi and the node it runs on; a workflow of nothing but
 bash nodes gets neither. give'r generates the Dockerfile from what each harness
 declares, so adding a harness is still one class and no file lists them.
 
-Each harness set is its own image — `giver:dev-pi`, `giver:dev-claude-code_pi` —
-rather than one that grows to cover everything you've ever run. An image whose
-contents depend on your run history is a combination nobody chose and nobody
-tested, and it would differ between two people running the same workflow. The
-expensive layers are shared, and node is installed before any harness, so every
-npm-based image shares that one too.
+Each harness set gets its own image: `giver:dev-pi`, `giver:dev-claude-code_pi`.
+give'r does not grow one image to cover everything you have run, because its
+contents would then depend on your run history — you would end up running a
+combination of harnesses that nothing was tested against, and a colleague
+running the same workflow would get a different image. Duplication is cheap
+here: the base image and the toolchain are shared layers, and node is installed
+before any harness, so every npm-based image shares it.
 
-`giver run` builds the image for what a workflow names, if it isn't already
-there. `LABEL giver.harnesses` records the contents and `giver.source` records
-which give'r is inside — a version doesn't move while you're editing, so the
-fingerprint is what stops a run using yesterday's kernel:
+`giver run` builds the image a workflow needs if it isn't already there. Two
+labels record what an image is. `giver.harnesses` lists the harnesses in it, and
+`giver.source` is a digest of the give'r inside it — a version number does not
+change while you edit the source, so without the digest a run can silently use
+an image built from older code:
 
 ```bash
 docker images --filter label=giver.harnesses

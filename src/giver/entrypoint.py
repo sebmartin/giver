@@ -2,9 +2,9 @@
 then become the program that was asked for.
 
 Nothing above this should be able to tell it is in a sandbox. A workflow runs
-whatever it likes, and the things it runs expect what any Unix box provides: an
-account they belong to, a home they can write, a working directory they own.
-Every deviation is a failure waiting for a workflow nobody has written yet.
+arbitrary programs, and those programs expect what any Unix machine provides: an
+account, a writable home directory, and a working directory they own. Anything
+missing shows up later as a failure in whatever workflow first depends on it.
 
 The uid cannot be baked into the image. give'r is a tool other people build and
 publish images for, and a uid only ever matches the machine that chose it —

@@ -38,17 +38,16 @@ def _label(image: str, key: str) -> str | None:
 def _ensure_image(harnesses: Iterable[Harness] = ()) -> str:
     """A local image carrying exactly these harnesses. Returns its tag.
 
-    Exactly, not at least. Growing one image to cover everything this machine
-    has ever run would make its contents a function of that history rather than
-    of any workflow — so two people running the same workflow would get
-    different images, and every one of them a combination of harnesses nobody
-    chose and nobody tested. Distinct sets get distinct tags instead; the
-    expensive layers are shared, and node is installed before any harness so
-    every npm-based image shares that one too.
+    Each distinct set gets its own tag. Growing a single image to cover
+    everything this machine has run would make its contents depend on that
+    history, so two people running the same workflow would get different
+    images, each holding a combination of harnesses nothing was tested against.
+    The duplication is cheap: the base image and the toolchain are shared
+    layers, and node is installed before any harness.
 
-    Within a tag, a rebuild is still needed when the give'r inside it has
-    changed — the version does not move while someone is editing the source, so
-    a fingerprint of it decides.
+    A rebuild is also needed when the give'r inside an existing tag has changed.
+    The version does not change while someone edits the source, so a fingerprint
+    of the source decides.
     """
     try:
         dockerfile_text = render(harnesses, dev=_PROJECT_ROOT)
@@ -82,14 +81,13 @@ def _user_args() -> list[str]:
     """Who the container should run as.
 
     A run writes its logs and artifacts onto a bind mount, and on a Linux host
-    the uid crosses that boundary unchanged — so what the container creates has
-    to already belong to whoever will read it. Not root for the other half of
-    the same reason give'r exists: a harness running unattended asks for no
-    permission prompts, and claude-code refuses that combination outright.
+    the uid crosses that boundary unchanged, so files the container creates have
+    to already belong to whoever will read them. It also must not be root:
+    claude-code refuses to run headless as uid 0.
 
-    Passed rather than baked, because the image is portable and this machine's
-    uid is not. Omitted where there is no uid to speak of — on Windows there is
-    no `geteuid`, and the container's own user is then the right answer.
+    Passed at run time rather than baked into the image, because the image is
+    portable and this machine's uid is not. Omitted on Windows, which has no
+    `geteuid`; the container's own user is the right answer there.
     """
     if not hasattr(os, "geteuid"):
         return []
@@ -187,10 +185,9 @@ def _interactive(harness_name: str | None, entrypoint: list[str]) -> int:
     for harness in harnesses:
         cmd += _harness_args(harness, interactive=True)
         prepare = ["--harness", harness.name]
-    # A command, not an entrypoint override. The image's entrypoint is what
-    # makes the container a sane environment for this uid, and these are the
-    # paths where a first-pass login is written — the last place that should be
-    # skipped.
+    # Passed as a command rather than an entrypoint override. The image's
+    # entrypoint sets the container up for this uid, and these paths write the
+    # first-pass login, so they must not skip it.
     cmd += [image, "python", "-m", "giver.harness", *prepare, "--", *entrypoint]
     return subprocess.run(cmd).returncode
 

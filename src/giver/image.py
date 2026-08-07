@@ -2,9 +2,9 @@
 
 An image is a function of the workflows it is built for: a harness is installed
 because a workflow asked for it, which is what lets routing decide where a step
-runs without first checking what happens to be present. Writing that file by
-hand meant enumerating harnesses in it, so adding one meant editing it — the
-one thing give'r is not allowed to make anyone do.
+runs without first checking what happens to be present. A hand-written
+Dockerfile could not do that, because it had to list the harnesses, so adding
+one meant editing it.
 
 give'r generates the file and does not build it. `giver dockerfile` prints it
 for whoever wants an image; the CLI pipes the same text to `docker build` for

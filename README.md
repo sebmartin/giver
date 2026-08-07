@@ -2,7 +2,7 @@
 
 A gated execution environment that lets LLMs just give'r.
 
-LLM agents are powerful but anxious — they ask for permission, pause for confirmation, and stall when things get uncertain. give'r flips that: workflows run to completion without human intervention, inside a Docker container where agents have exactly the access they've been given and nothing more. The container is the gate. Within it, agents can move fast; outside it, nothing changes without your say-so.
+Agent CLIs stop and ask for confirmation, which makes them awkward to run unattended. give'r runs them in a Docker container with permission prompts turned off, so a workflow finishes without you watching it. The container is what makes that safe: an agent can do what it likes inside, and reaches nothing outside except the directories you mount.
 
 give'r takes a YAML workflow file and executes it — scheduling nodes in parallel, routing logs, checking idempotency, and driving the DAG to completion. It has no opinion on what the workflow means or what the agents do.
 
@@ -39,11 +39,11 @@ giver run workflow.yaml
 
 A **harness** is a coding-agent CLI that give'r drives — `pi`, `claude-code` or `codex`. give'r orchestrates; the harness does the agent work.
 
-give'r ships three harnesses, but it is not tied to them. No code in give'r branches on which harness is running — there is no `if harness == "claude"` anywhere, and the three that ship use the same interface a harness you write would.
+give'r ships three harnesses, but it is not tied to them. No code in give'r branches on which harness is running — there is no `if harness == "claude"` anywhere — so the three that ship use the same interface as one you write.
 
 The hooks in that interface exist because a shipped harness needed one. `ports` is there because pi's login runs a local OAuth callback. `prepare()` is there because claude-code keeps its config outside the directory give'r mounts, so something has to reconcile that before it runs. A harness with a similar problem uses the same hook.
 
-This matters if you use an agent CLI give'r doesn't ship, or if the one you use changes: the workflow engine and the agent tooling can move independently.
+So you can run an agent CLI give'r doesn't ship, and give'r doesn't have to release when one of them changes.
 
 ### Writing a harness
 
@@ -85,7 +85,7 @@ Harnesses are driven as one-shot invocations per step, with continuity threaded 
 | `claude-code` | `claude -p` | `--resume <id> --fork-session` | yes, opt-in |
 | `codex` | `codex exec` | `codex exec resume <id>` | **no** |
 
-Branching leaves the parent session untouched, so re-running a step can't corrupt the one it came from. codex's headless mode has no branching variant — it resumes in place. Every harness therefore declares `forks_on_resume` for replay logic to read; give'r replays at node granularity today (a node whose output artifact exists is skipped whole), so nothing consults the flag yet — step-level replay is where it becomes load-bearing.
+Branching leaves the parent session untouched, so re-running a step can't corrupt the one it came from. codex's headless mode has no branching variant; it resumes in place. Each harness declares `forks_on_resume` so replay logic can read it. Nothing reads it yet: give'r currently replays whole nodes, skipping any whose output artifact exists. It will matter once give'r can replay individual steps.
 
 ## Models
 
@@ -99,7 +99,7 @@ model: ollama/qwen-2.5-coder        # vendor required — qwen is served by seve
 
 A bare name give'r can't place is a load-time error rather than a guess, because `qwen`, `llama` and `deepseek` are served by different vendors with different credentials and costs. Qualified names pass through unvalidated — the harness itself will reject a bad model id with a real error.
 
-Which harness runs a step is decided by the workflow, not by the model: `harness: pi` with an Anthropic model is Claude on an API key, and that's a legitimate thing to ask for.
+The workflow decides which harness runs a step; the model does not. `harness: pi` with an Anthropic model runs Claude through pi on an API key, which is a supported combination.
 
 ## Credentials
 
@@ -221,7 +221,7 @@ Everything resolvable is resolved when the workflow loads, so a typo'd model, an
 - **Agent nodes** — multi-step sessions delegated to a harness.
 - **Bash nodes** — deterministic steps: file prep, validation, shell commands.
 - **CLI** — host-side only; owns every Docker word. A harness declares `~/.pi/agent`; turning that into a volume, a container path and a line in a Dockerfile is the CLI's job, because a local no-container mode is planned.
-- **Entrypoint** (`giver/entrypoint.py`) — runs first in every container give'r starts, makes it an ordinary environment for the invoking user, and execs. Skipping it is a no-op, so a runtime somebody else started stays their business.
+- **Entrypoint** (`giver/entrypoint.py`) — runs first in every container give'r starts, sets it up for the invoking user, then execs the command. Does nothing when `GIVER_UID` is unset, so a container someone else started is left alone.
 
 ## Status
 

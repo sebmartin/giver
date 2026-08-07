@@ -27,9 +27,9 @@ class CodexHarness:
     # Unset until an interactive `giver shell codex` login is observed.
     env: dict[str, str] = {}
     ports: tuple[str, ...] = ()
-    repl_cmd = ("codex",)
+    repl_cmd: tuple[str, ...] = ("codex",)
     install = "npm install -g @openai/codex"
-    toolchain = NODE
+    toolchain: str | None = NODE
 
     # Resuming continues in place rather than branching, so a replayed step
     # mutates the session it resumed from. Anything that replays work has to

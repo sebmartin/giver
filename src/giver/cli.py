@@ -137,7 +137,10 @@ def _harnesses_for(*workflow_paths: Path) -> list[Harness]:
     named: set[str] = set()
     for path in workflow_paths:
         workflow = Workflow.from_file(path)
-        named |= {n.harness_name for n in workflow.nodes if isinstance(n, AgentNode)}
+        for node in workflow.nodes:
+            if isinstance(node, AgentNode):
+                assert node.harness_name is not None  # resolved at load time
+                named.add(node.harness_name)
     return [harness_by_name(name) for name in sorted(named)]
 
 

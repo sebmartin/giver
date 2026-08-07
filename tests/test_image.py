@@ -1,5 +1,6 @@
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -7,9 +8,13 @@ from giver.harness import NODE, ClaudeCodeHarness, PiHarness
 from giver.image import render, source_fingerprint, tag
 
 
-def _harness(name, install, toolchain=None):
+def _harness(name, install, toolchain=None) -> Any:
     """A stand-in for a harness: the generator reads three fields and calls
-    nothing, so anything carrying them is a harness as far as it is concerned."""
+    nothing, so anything carrying them is a harness as far as it is concerned.
+
+    Typed `Any` because it deliberately isn't one — it has no `run`, which is
+    the point. What `render` needs is narrower than the whole protocol.
+    """
     return SimpleNamespace(name=name, install=install, toolchain=toolchain)
 
 

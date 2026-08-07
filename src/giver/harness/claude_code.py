@@ -29,9 +29,9 @@ class ClaudeCodeHarness:
     # `claude setup-token` mints a credential without one. Do not invent values.
     env: dict[str, str] = {}
     ports: tuple[str, ...] = ()
-    repl_cmd = ("claude",)
+    repl_cmd: tuple[str, ...] = ("claude",)
     install = "npm install -g @anthropic-ai/claude-code"
-    toolchain = NODE
+    toolchain: str | None = NODE
 
     _VENDORS = frozenset({"anthropic"})
 

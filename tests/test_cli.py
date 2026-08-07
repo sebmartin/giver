@@ -42,7 +42,7 @@ def _build(mock):
 CURRENT = source_fingerprint(_PROJECT_ROOT)
 
 
-def _mock_side_effects(image_source=CURRENT, exit_code="0"):
+def _mock_side_effects(image_source: str | None = CURRENT, exit_code: str = "0"):
     """Answer each docker call by what it asks for, so a test is not coupled to
     how many calls a run makes.
 

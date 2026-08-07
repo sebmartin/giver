@@ -116,18 +116,18 @@ def test_every_harness_declares_how_it_is_installed():
 
 
 def test_harnesses_sharing_a_prerequisite_share_the_constant():
-    """`toolchain` is deduplicated by string equality, so three harnesses that
+    """`pre_install` is deduplicated by string equality, so three harnesses that
     each need node collapse to one install only if they name the same object.
     Copying the command into each class would silently install node twice."""
-    assert {h.name: h.toolchain for h in HARNESSES} == {
+    assert {h.name: h.pre_install for h in HARNESSES} == {
         "claude-code": (NODE,),
         "codex": (NODE,),
         "pi": (NODE,),
     }
 
 
-def test_a_toolchain_is_the_command_not_a_name_to_look_up():
-    """Nothing resolves `toolchain` — a harness needing something other than
+def test_a_preinstall_is_the_command_not_a_name_to_look_up():
+    """Nothing resolves `pre_install` — a harness needing something other than
     node declares its own command and no code learns about it."""
     assert NODE.startswith("apt-get update")
     assert "nodejs" in NODE

@@ -91,7 +91,7 @@ def render(harnesses: Iterable[Harness], dev: Path | None = None) -> str:
 
     sections = [
         [f"FROM {BASE_IMAGE}"],
-        [f"RUN {command}" for command in _toolchains(harnesses)]
+        [f"RUN {command}" for command in _pre_installs(harnesses)]
         + [f"RUN {harness.install}" for harness in harnesses],
         _install_giver(dev),
         [
@@ -128,16 +128,16 @@ def _labels(harnesses: list[Harness], dev: Path | None) -> list[str]:
     return labels
 
 
-def _toolchains(harnesses: list[Harness]) -> list[str]:
-    """Each distinct prerequisite, once, in the order first asked for.
+def _pre_installs(harnesses: list[Harness]) -> list[str]:
+    """Each distinct command, once, in the order first asked for.
 
-    Deduplicated by string equality: harnesses that share a prerequisite share
-    a constant, so an image carrying three npm harnesses installs node once.
+    Deduplicated by string equality: harnesses needing the same thing share a
+    constant, so an image carrying three npm harnesses installs node once.
     Nothing here knows what any of these commands do.
     """
     seen: list[str] = []
     for harness in harnesses:
-        for command in harness.toolchain:
+        for command in harness.pre_install:
             if command not in seen:
                 seen.append(command)
     return seen

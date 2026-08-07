@@ -42,8 +42,8 @@ def _ensure_image(harnesses: Iterable[Harness] = ()) -> str:
     everything this machine has run would make its contents depend on that
     history, so two people running the same workflow would get different
     images, each holding a combination of harnesses nothing was tested against.
-    The duplication is cheap: the base image and the toolchain are shared
-    layers, and node is installed before any harness.
+    The duplication is cheap: the base image and everything installed before
+    the harnesses are shared layers, and node is installed before any harness.
 
     A rebuild is also needed when the give'r inside an existing tag has changed.
     The version does not change while someone edits the source, so a fingerprint

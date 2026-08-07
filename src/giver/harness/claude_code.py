@@ -4,9 +4,9 @@ import logging
 import os
 from pathlib import Path
 
+from giver.harness.preinstall import NODE
 from giver.harness.process import spawn
 from giver.harness.protocol import AgentStep
-from giver.harness.toolchains import NODE
 
 
 class ClaudeCodeHarness:
@@ -31,7 +31,7 @@ class ClaudeCodeHarness:
     ports: tuple[str, ...] = ()
     repl_cmd: tuple[str, ...] = ("claude",)
     install = "npm install -g @anthropic-ai/claude-code"
-    toolchain: tuple[str, ...] = (NODE,)
+    pre_install: tuple[str, ...] = (NODE,)
 
     _VENDORS = frozenset({"anthropic"})
 

@@ -57,7 +57,7 @@ class MyHarness:
     ports = ()                                # only its interactive login
     repl_cmd = ("mine",)
     install = "npm install -g my-agent"       # becomes a RUN line
-    toolchain = (NODE,)                       # what that install needs first
+    pre_install = (NODE,)                     # run before it, so node is there
     forks_on_resume = True                    # can it branch a session?
 
     def serves(self, vendor): return vendor == "acme"
@@ -65,7 +65,7 @@ class MyHarness:
     async def run(self, steps, log): ...      # do the work, return an exit status
 ```
 
-Register it in `giver/harness/registry.py`. `install` and `toolchain` get it into generated images without editing a Dockerfile, and `state_path` gets it a persisted volume without naming a container path. `run` is the only part with substantial work in it: parsing the CLI's event stream to find the session id and whether the step succeeded.
+Register it in `giver/harness/registry.py`. `install` and `pre_install` get it into generated images without editing a Dockerfile, and `state_path` gets it a persisted volume without naming a container path. `run` is the only part with substantial work in it: parsing the CLI's event stream to find the session id and whether the step succeeded.
 
 `run` takes a list of steps, streams output to the log, and returns an exit status. The three shipped harnesses do that by running a subprocess, but the interface does not require one — a harness calling a library in-process works the same way.
 
@@ -141,8 +141,9 @@ give'r does not grow one image to cover everything you have run, because its
 contents would then depend on your run history — you would end up running a
 combination of harnesses that nothing was tested against, and a colleague
 running the same workflow would get a different image. Duplication is cheap
-here: the base image and the toolchain are shared layers, and node is installed
-before any harness, so every npm-based image shares it.
+here: the base image and everything installed before the harnesses are shared
+layers, and node is installed before any harness, so every npm-based image
+shares it.
 
 `giver run` builds the image a workflow needs if it isn't already there. Two
 labels record what an image is. `giver.harnesses` lists the harnesses in it, and

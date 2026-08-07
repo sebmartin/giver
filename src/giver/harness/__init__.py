@@ -14,7 +14,7 @@ importing each other:
 - `vendors`   turning `claude-opus-4-5` into `anthropic/claude-opus-4-5`
 - `process`   subprocess plumbing shared by the CLI-backed harnesses
 - `registry`  which harnesses exist, and looking one up by name
-- `toolchains` commands a harness's `install` needs to already be there
+- `preinstall` commands to run before a harness's `install`
 """
 
 from giver.harness.claude_code import ClaudeCodeHarness
@@ -30,7 +30,7 @@ from giver.harness.registry import (
     HarnessName,
     harness_by_name,
 )
-from giver.harness.toolchains import NODE
+from giver.harness.preinstall import NODE
 from giver.harness.vendors import VENDOR_PREFIXES, resolve_model, vendor_of
 
 __all__ = [

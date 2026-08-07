@@ -8,14 +8,14 @@ from giver.harness import NODE, ClaudeCodeHarness, PiHarness
 from giver.image import render, source_fingerprint, tag
 
 
-def _harness(name, install, toolchain=()) -> Any:
+def _harness(name, install, pre_install=()) -> Any:
     """A stand-in for a harness: the generator reads three fields and calls
     nothing, so anything carrying them is a harness as far as it is concerned.
 
     Typed `Any` because it deliberately isn't one — it has no `run`, which is
     the point. What `render` needs is narrower than the whole protocol.
     """
-    return SimpleNamespace(name=name, install=install, toolchain=toolchain)
+    return SimpleNamespace(name=name, install=install, pre_install=pre_install)
 
 
 def _runs(text: str) -> list[str]:
@@ -35,9 +35,9 @@ def checkout(tmp_path) -> Path:
 # ── contents ──────────────────────────────────────────────────────────────────
 
 
-def test_installs_each_harness_and_its_toolchain_once(checkout):
+def test_installs_each_harness_and_what_it_needs_first_once(checkout):
     """Two harnesses needing node get one node layer, not two — the whole
-    reason `toolchain` is a shared constant rather than a copied string."""
+    reason `pre_install` is a shared constant rather than a copied string."""
     text = render([PiHarness(), ClaudeCodeHarness()], dev=checkout)
 
     assert _runs(text) == [
@@ -48,7 +48,7 @@ def test_installs_each_harness_and_its_toolchain_once(checkout):
     ]
 
 
-def test_omits_the_toolchain_when_nothing_declares_one(checkout):
+def test_omits_the_preinstall_when_nothing_declares_one(checkout):
     """node exists for the harnesses, not for give'r — an image carrying only
     harnesses that do not need it should not carry it."""
     text = render([_harness("nodeless", "pip install some-agent")], dev=checkout)
@@ -56,13 +56,13 @@ def test_omits_the_toolchain_when_nothing_declares_one(checkout):
     assert _runs(text) == ["pip install some-agent", "pip install ."]
 
 
-def test_emits_distinct_toolchains_separately(checkout):
-    """Nothing resolves a toolchain, so a harness needing something other than
-    node needs no change here — it just declares its own command."""
+def test_emits_distinct_preinstalls_separately(checkout):
+    """Nothing resolves a `pre_install`, so a harness needing something other
+    than node needs no change here — it just declares its own command."""
     text = render(
         [
-            _harness("a", "install-a", toolchain=("setup-rust",)),
-            _harness("b", "install-b", toolchain=(NODE,)),
+            _harness("a", "install-a", pre_install=("setup-rust",)),
+            _harness("b", "install-b", pre_install=(NODE,)),
         ],
         dev=checkout,
     )
@@ -76,8 +76,8 @@ def test_a_harness_needing_node_and_more_still_shares_the_node_layer(checkout):
     command, which would match nothing and install node a second time."""
     text = render(
         [
-            _harness("a", "install-a", toolchain=(NODE, "apt-get install -y ripgrep")),
-            _harness("b", "install-b", toolchain=(NODE,)),
+            _harness("a", "install-a", pre_install=(NODE, "apt-get install -y ripgrep")),
+            _harness("b", "install-b", pre_install=(NODE,)),
         ],
         dev=checkout,
     )

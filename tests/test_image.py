@@ -93,6 +93,30 @@ def test_labels_an_empty_harness_set(checkout):
     assert _runs(text) == ["pip install ."]
 
 
+# ── the environment the image hands over ──────────────────────────────────────
+
+
+def test_entrypoint_is_the_part_nothing_should_skip(checkout):
+    """ENTRYPOINT holds what is invariant — making the container sane for
+    whatever uid it is told. The program is the command, so wanting a different
+    one replaces CMD rather than overriding the entrypoint and skipping the
+    privilege drop with it."""
+    text = render([PiHarness()], dev=checkout)
+
+    assert 'ENTRYPOINT ["python", "-m", "giver.entrypoint"]' in text
+    assert 'CMD ["python", "-m", "giver.kernel"]' in text
+
+
+def test_work_happens_somewhere_other_than_giver_s_own_source(checkout):
+    """/app is root-owned, and does not exist at all once give'r installs from
+    PyPI — so cwd must not be it, or it differs between the two."""
+    text = render([PiHarness()], dev=checkout)
+    lines = text.splitlines()
+
+    assert "ENV HOME=/home/giver" in lines
+    assert lines.index("WORKDIR /work") > lines.index("WORKDIR /app")
+
+
 # ── where give'r comes from ───────────────────────────────────────────────────
 
 

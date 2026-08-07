@@ -1,3 +1,5 @@
+import os
+
 import pytest
 from unittest.mock import MagicMock, patch
 
@@ -215,15 +217,15 @@ def test_run_mounts_harness_state_volumes_writable(tmp_path):
     breaks multi-step nodes, resume, and unattended auth alike."""
     cmd = _start_cmd(_agent_workflow(tmp_path, "pi", "claude-code"), tmp_path)
 
-    assert "giver-pi-state:/root/.pi/agent" in cmd
-    assert "giver-claude-code-state:/root/.claude" in cmd
+    assert "giver-pi-state:/home/giver/.pi/agent" in cmd
+    assert "giver-claude-code-state:/home/giver/.claude" in cmd
     assert not any(c.endswith(":ro") and "-state" in c for c in cmd)
 
 
 def test_run_mounts_only_the_harnesses_the_workflow_uses(tmp_path):
     cmd = _start_cmd(_agent_workflow(tmp_path, "pi"), tmp_path)
 
-    assert "giver-pi-state:/root/.pi/agent" in cmd
+    assert "giver-pi-state:/home/giver/.pi/agent" in cmd
     assert not any("claude-code-state" in c for c in cmd)
 
 
@@ -250,7 +252,11 @@ def test_run_forwards_no_credentials_from_the_host_environment(tmp_path):
     cmd = _start_cmd(_agent_workflow(tmp_path, "pi", "claude-code"), tmp_path)
 
     passed = {c for i, c in enumerate(cmd) if i and cmd[i - 1] == "-e"}
-    assert passed == {"PI_OAUTH_CALLBACK_HOST=0.0.0.0"}
+    assert passed == {
+        "PI_OAUTH_CALLBACK_HOST=0.0.0.0",
+        f"GIVER_UID={os.getuid()}",
+        f"GIVER_GID={os.getgid()}",
+    }
 
 
 # ── shell ─────────────────────────────────────────────────────────────────────
@@ -264,10 +270,10 @@ def test_shell_pi_drops_into_bash_with_pi_volume():
     assert "--rm" in cmd and "-it" in cmd
     assert "53692:53692" in cmd
     assert "PI_OAUTH_CALLBACK_HOST=0.0.0.0" in cmd
-    assert "giver-pi-state:/root/.pi/agent" in cmd  # writable — login persists to the volume
-    assert cmd[-9:] == [
-        "--entrypoint", "python", "giver:latest",
-        "-m", "giver.harness", "--harness", "pi", "--", "bash",
+    assert "giver-pi-state:/home/giver/.pi/agent" in cmd  # writable — login persists to the volume
+    assert cmd[-8:] == [
+        "giver:latest",
+        "python", "-m", "giver.harness", "--harness", "pi", "--", "bash",
     ]
 
 
@@ -276,7 +282,7 @@ def test_shell_claude_drops_into_bash_with_claude_volume():
         shell("claude-code")
 
     cmd = _docker_run(mock, "-it")
-    assert "giver-claude-code-state:/root/.claude" in cmd
+    assert "giver-claude-code-state:/home/giver/.claude" in cmd
     assert cmd[-1] == "bash"
 
 
@@ -288,10 +294,10 @@ def test_shell_enters_through_giver_so_the_harness_is_prepared(tmp_path):
         shell("claude-code")
 
     cmd = _docker_run(mock, "-it")
-    tail = cmd[cmd.index("--entrypoint"):]
+    tail = cmd[cmd.index("giver:latest"):]
     assert tail == [
-        "--entrypoint", "python", "giver:latest",
-        "-m", "giver.harness", "--harness", "claude-code", "--", "bash",
+        "giver:latest",
+        "python", "-m", "giver.harness", "--harness", "claude-code", "--", "bash",
     ]
 
 
@@ -303,8 +309,9 @@ def test_shell_no_harness_still_reaches_bash():
     cmd = _docker_run(mock, "-it")
     assert cmd == [
         "docker", "run", "--rm", "-it",
-        "--entrypoint", "python", "giver:latest",
-        "-m", "giver.harness", "--", "bash",
+        "-e", f"GIVER_UID={os.getuid()}", "-e", f"GIVER_GID={os.getgid()}",
+        "giver:latest",
+        "python", "-m", "giver.harness", "--", "bash",
     ]
 
 
@@ -322,10 +329,10 @@ def test_chat_launches_the_harness_repl_with_the_same_provisioning():
 
     cmd = _docker_run(mock, "-it")
     assert "53692:53692" in cmd  # same declared infra as `shell pi`
-    assert "giver-pi-state:/root/.pi/agent" in cmd
-    assert cmd[cmd.index("--entrypoint"):] == [
-        "--entrypoint", "python", "giver:latest",
-        "-m", "giver.harness", "--harness", "pi", "--", "pi",
+    assert "giver-pi-state:/home/giver/.pi/agent" in cmd
+    assert cmd[cmd.index("giver:latest"):] == [
+        "giver:latest",
+        "python", "-m", "giver.harness", "--harness", "pi", "--", "pi",
     ]
 
 

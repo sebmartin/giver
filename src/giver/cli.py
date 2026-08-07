@@ -1,4 +1,5 @@
 import argparse
+import os
 import subprocess
 import sys
 import time
@@ -6,6 +7,7 @@ from collections.abc import Iterable
 from datetime import datetime, timezone
 from pathlib import Path
 
+from giver.entrypoint import HOME
 from giver.harness import HARNESS_NAMES, HARNESSES, Harness, harness_by_name
 from giver.image import LABEL_KEY, render
 from giver.kernel.nodes.agent import AgentNode
@@ -78,8 +80,26 @@ def _ensure_image(harnesses: Iterable[Harness] = ()) -> None:
         sys.exit(1)
 
 
+def _user_args() -> list[str]:
+    """Who the container should run as.
+
+    A run writes its logs and artifacts onto a bind mount, and on a Linux host
+    the uid crosses that boundary unchanged — so what the container creates has
+    to already belong to whoever will read it. Not root for the other half of
+    the same reason give'r exists: a harness running unattended asks for no
+    permission prompts, and claude-code refuses that combination outright.
+
+    Passed rather than baked, because the image is portable and this machine's
+    uid is not. Omitted where there is no uid to speak of — on Windows there is
+    no `geteuid`, and the container's own user is then the right answer.
+    """
+    if not hasattr(os, "geteuid"):
+        return []
+    return ["-e", f"GIVER_UID={os.getuid()}", "-e", f"GIVER_GID={os.getgid()}"]
+
+
 # A harness describes itself in its own terms — pi says `~/.pi/agent`. These
-# translate that into the Docker names for a root container, which is knowledge
+# translate that into the Docker names for the container, which is knowledge
 # the host has and the harness shouldn't.
 def _volume(harness: Harness) -> str:
     # `state`, not `creds`: it is the harness's whole `state_path` — sessions,
@@ -88,7 +108,7 @@ def _volume(harness: Harness) -> str:
 
 
 def _container_path(harness: Harness) -> str:
-    return "/root/" + harness.state_path.removeprefix("~/")
+    return f"{HOME}/" + harness.state_path.removeprefix("~/")
 
 
 def _harness_args(harness: Harness, interactive: bool) -> list[str]:
@@ -131,6 +151,7 @@ def _run_container(
     cmd = [
         "docker", "run", "-d",
         "--name", name,
+        *_user_args(),
         "-v", f"{workflow_abs}:/workflow.yaml:ro",
         "-v", f"{runs_dir}:/runs",
     ]
@@ -141,7 +162,7 @@ def _run_container(
     # token refreshes.
     for harness in harnesses:
         cmd += _harness_args(harness, interactive=False)
-    cmd += [IMAGE, "/workflow.yaml"]
+    cmd += [IMAGE, "python", "-m", "giver.kernel", "/workflow.yaml"]
     subprocess.run(cmd)
 
 
@@ -163,13 +184,16 @@ def _interactive(harness_name: str | None, entrypoint: list[str]) -> int:
             return 1
 
     _ensure_image(harnesses)
-    cmd = ["docker", "run", "--rm", "-it"]
+    cmd = ["docker", "run", "--rm", "-it", *_user_args()]
     prepare: list[str] = []
     for harness in harnesses:
         cmd += _harness_args(harness, interactive=True)
         prepare = ["--harness", harness.name]
-    cmd += ["--entrypoint", "python", IMAGE]
-    cmd += ["-m", "giver.harness", *prepare, "--", *entrypoint]
+    # A command, not an entrypoint override. The image's entrypoint is what
+    # makes the container a sane environment for this uid, and these are the
+    # paths where a first-pass login is written — the last place that should be
+    # skipped.
+    cmd += [IMAGE, "python", "-m", "giver.harness", *prepare, "--", *entrypoint]
     return subprocess.run(cmd).returncode
 
 

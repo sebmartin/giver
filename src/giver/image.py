@@ -19,6 +19,7 @@ builds owns the tag and its shape cannot be relied on. It is readable with
 from collections.abc import Iterable
 from pathlib import Path
 
+from giver.entrypoint import HOME, WORKDIR
 from giver.harness import Harness
 
 BASE_IMAGE = "python:3.13-slim"
@@ -46,8 +47,22 @@ def render(harnesses: Iterable[Harness], dev: Path | None = None) -> str:
         + [f"RUN {harness.install}" for harness in harnesses],
         _install_giver(dev),
         [
+            # Where the account the entrypoint creates will live, and where a
+            # workflow's own work happens. /app holds give'r's build inputs and
+            # is root-owned; it also does not exist at all once give'r installs
+            # from PyPI, so cwd must not be it.
+            f"ENV HOME={HOME}",
+            f"WORKDIR {WORKDIR}",
+        ],
+        [
             f'LABEL {LABEL_KEY}="{",".join(h.name for h in harnesses)}"',
-            'ENTRYPOINT ["python", "-m", "giver.kernel"]',
+            # ENTRYPOINT is what is invariant about this container: it makes the
+            # environment sane for whatever uid it is told, then execs. The
+            # program is the command, so wanting a different one — `giver shell`,
+            # `giver chat`, a CI step — replaces CMD rather than overriding the
+            # entrypoint and skipping the part nothing should skip.
+            'ENTRYPOINT ["python", "-m", "giver.entrypoint"]',
+            'CMD ["python", "-m", "giver.kernel"]',
         ],
     ]
     return "\n\n".join("\n".join(s) for s in sections if s) + "\n"

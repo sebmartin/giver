@@ -57,7 +57,7 @@ class MyHarness:
     ports = ()                                # only its interactive login
     repl_cmd = ("mine",)
     install = "npm install -g my-agent"       # becomes a RUN line
-    toolchain = NODE                          # what that install needs first
+    toolchain = (NODE,)                       # what that install needs first
     forks_on_resume = True                    # can it branch a session?
 
     def serves(self, vendor): return vendor == "acme"

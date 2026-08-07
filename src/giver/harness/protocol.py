@@ -36,11 +36,13 @@ class Harness(Protocol):
     repl_cmd: tuple[str, ...]  # interactive launch argv
     install: str  # shell command that installs it; one generated RUN line
 
-    # What `install` needs to already be there — the command, not a name give'r
-    # looks up. Harnesses sharing a prerequisite share a constant from
-    # `toolchains`, so the generated image installs it once however many
-    # harnesses it carries. None when `install` stands alone.
-    toolchain: str | None
+    # What `install` needs to already be there — commands, not names give'r
+    # looks up. Deduplicated one element at a time across every harness in an
+    # image, so a harness needing node and something else shares the node
+    # command with the other npm harnesses and appends only its own. Harnesses
+    # sharing a prerequisite share a constant from `toolchains`. Empty when
+    # `install` stands alone.
+    toolchain: tuple[str, ...]
 
     # Can it branch a session instead of continuing it in place? Branching
     # leaves the parent untouched, which is what makes replaying a step safe.

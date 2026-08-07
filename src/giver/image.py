@@ -137,8 +137,9 @@ def _toolchains(harnesses: list[Harness]) -> list[str]:
     """
     seen: list[str] = []
     for harness in harnesses:
-        if harness.toolchain and harness.toolchain not in seen:
-            seen.append(harness.toolchain)
+        for command in harness.toolchain:
+            if command not in seen:
+                seen.append(command)
     return seen
 
 

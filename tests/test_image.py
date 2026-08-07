@@ -8,7 +8,7 @@ from giver.harness import NODE, ClaudeCodeHarness, PiHarness
 from giver.image import render, source_fingerprint, tag
 
 
-def _harness(name, install, toolchain=None) -> Any:
+def _harness(name, install, toolchain=()) -> Any:
     """A stand-in for a harness: the generator reads three fields and calls
     nothing, so anything carrying them is a harness as far as it is concerned.
 
@@ -61,13 +61,34 @@ def test_emits_distinct_toolchains_separately(checkout):
     node needs no change here — it just declares its own command."""
     text = render(
         [
-            _harness("a", "install-a", toolchain="setup-rust"),
-            _harness("b", "install-b", toolchain=NODE),
+            _harness("a", "install-a", toolchain=("setup-rust",)),
+            _harness("b", "install-b", toolchain=(NODE,)),
         ],
         dev=checkout,
     )
 
     assert _runs(text)[:2] == ["setup-rust", NODE]
+
+
+def test_a_harness_needing_node_and_more_still_shares_the_node_layer(checkout):
+    """Deduplication is per command, not per harness. A harness that needs node
+    and one other thing would otherwise have to spell out its own combined
+    command, which would match nothing and install node a second time."""
+    text = render(
+        [
+            _harness("a", "install-a", toolchain=(NODE, "apt-get install -y ripgrep")),
+            _harness("b", "install-b", toolchain=(NODE,)),
+        ],
+        dev=checkout,
+    )
+
+    assert _runs(text) == [
+        NODE,
+        "apt-get install -y ripgrep",
+        "install-a",
+        "install-b",
+        "pip install .",
+    ]
 
 
 def test_orders_harnesses_by_name_whatever_order_they_arrive_in(checkout):

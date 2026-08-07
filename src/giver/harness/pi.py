@@ -23,7 +23,7 @@ class PiHarness:
     ports: tuple[str, ...] = ("53692:53692",)
     repl_cmd: tuple[str, ...] = ("pi",)
     install = "npm install -g --ignore-scripts @earendil-works/pi-coding-agent"
-    toolchain: str | None = NODE
+    toolchain: tuple[str, ...] = (NODE,)
 
     # `--fork <id>` branches rather than continuing in place.
     forks_on_resume = True

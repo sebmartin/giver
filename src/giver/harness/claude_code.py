@@ -31,7 +31,7 @@ class ClaudeCodeHarness:
     ports: tuple[str, ...] = ()
     repl_cmd: tuple[str, ...] = ("claude",)
     install = "npm install -g @anthropic-ai/claude-code"
-    toolchain: str | None = NODE
+    toolchain: tuple[str, ...] = (NODE,)
 
     _VENDORS = frozenset({"anthropic"})
 

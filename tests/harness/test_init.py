@@ -120,9 +120,9 @@ def test_harnesses_sharing_a_prerequisite_share_the_constant():
     each need node collapse to one install only if they name the same object.
     Copying the command into each class would silently install node twice."""
     assert {h.name: h.toolchain for h in HARNESSES} == {
-        "claude-code": NODE,
-        "codex": NODE,
-        "pi": NODE,
+        "claude-code": (NODE,),
+        "codex": (NODE,),
+        "pi": (NODE,),
     }
 
 

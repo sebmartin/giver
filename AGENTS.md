@@ -18,7 +18,7 @@ uv run pytest -v     # verbose
 - **The kernel runs inside Docker.** The CLI runs on the host, invokes `docker run`, and streams output back. Do not add interactive or host-signaling logic to the kernel.
 - **Agent-CLI knowledge lives in `giver/harness/`.** One class per harness holds everything about that program — how to invoke it headless, how to parse its event stream, what infrastructure it needs, how it gets into an image. `AgentNode` delegates to it and knows nothing else; the execution core (scheduler, logging) and every other node stay harness-ignorant. The harness package depends on neither `cli` nor `kernel`, and both read it.
 - **A harness states what it needs, never where it lands.** `~/.pi/agent`, not `/home/giver/.pi/agent`. Deriving Docker words — volume names, container paths, `-v`/`-e`/`-p`, the Dockerfile itself — is the CLI's job, because a local no-container mode is planned.
-- **The image is generated, never hand-written.** It carries pi plus the harnesses a workflow names, built from each harness's `install` and `toolchain`. Nothing enumerates harnesses in a Dockerfile.
+- **The image is generated, never hand-written.** It carries exactly the harnesses a workflow names and what those need to run, built from each harness's `install` and `toolchain`. Nothing enumerates harnesses in a Dockerfile.
 - **The container is an ordinary Unix box.** A real account, a writable `$HOME`, a working directory the user owns. The kernel must not be able to tell it is in a sandbox, and no uid is baked into an image — `giver.entrypoint` creates the account for whatever uid it is handed, then drops to it.
 - **`run` is a contract, not a spawn.** "Execute these steps, stream to the log, return status." Both shipped harnesses shell out, but nothing in the interface may assume a subprocess — an in-process harness has to stay buildable.
 - **Bash nodes carry their own command.** The execution core runs what a node gives it and never branches on node type.
@@ -37,6 +37,14 @@ uv run pytest -v     # verbose
 - Logging is scoped to an execution — `Logger` sets up handlers per node name, is used as a context manager, and tears down on exit; never accumulate global handlers
 - The CLI is a host-side wrapper that runs the kernel inside a Docker container; the kernel is agnostic of that infrastructure and could run on the host directly. The CLI and kernel may share code, but the kernel must not depend on `cli`.
 - No stubs or empty files — add files when the code exists
+
+## Documentation
+
+- **`README.md` ships with the code.** A PR that changes user-visible behaviour updates it in the same PR. It is the only description of give'r anyone outside this repo reads, and a README describing the previous design is worse than none.
+- **User-visible means**: a command or flag added, removed or changed; a changed default; how images are built, tagged or labelled; what the container looks like from inside; a field on the harness Protocol; a `Status` box that just became true.
+- **Never document what isn't built.** A decided-but-unimplemented design belongs in `Status` as an unchecked box, never in prose that reads as current. Claiming "CI builds the image once and runs inside it" while `giver run` still shells out to `docker` is a lie a reader only discovers by trying it.
+- **Verify each claim against the code, not against memory.** Documentation written from what you intended rather than what shipped is how the README came to say a pi image contains no node, when pi is an npm package and every pi image carries one.
+- **Sell the load-bearing ideas, don't just state them.** "Bring your own harness" is the reason the harness layer is shaped the way it is; a reader who skims past one flat sentence about it has missed what give'r is.
 
 ## Testing
 

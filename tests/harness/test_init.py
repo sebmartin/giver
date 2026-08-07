@@ -3,6 +3,7 @@ import pytest
 from giver.harness import (
     DEFAULT_HARNESS,
     HARNESSES,
+    NODE,
     ClaudeCodeHarness,
     CodexHarness,
     PiHarness,
@@ -104,3 +105,29 @@ def test_every_harness_declares_whether_it_can_fork():
         "codex": False,
         "pi": True,
     }
+
+
+def test_every_harness_declares_how_it_is_installed():
+    assert {h.name: h.install for h in HARNESSES} == {
+        "claude-code": "npm install -g @anthropic-ai/claude-code",
+        "codex": "npm install -g @openai/codex",
+        "pi": "npm install -g --ignore-scripts @earendil-works/pi-coding-agent",
+    }
+
+
+def test_harnesses_sharing_a_prerequisite_share_the_constant():
+    """`toolchain` is deduplicated by string equality, so three harnesses that
+    each need node collapse to one install only if they name the same object.
+    Copying the command into each class would silently install node twice."""
+    assert {h.name: h.toolchain for h in HARNESSES} == {
+        "claude-code": NODE,
+        "codex": NODE,
+        "pi": NODE,
+    }
+
+
+def test_a_toolchain_is_the_command_not_a_name_to_look_up():
+    """Nothing resolves `toolchain` — a harness needing something other than
+    node declares its own command and no code learns about it."""
+    assert NODE.startswith("apt-get update")
+    assert "nodejs" in NODE

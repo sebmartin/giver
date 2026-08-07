@@ -6,6 +6,7 @@ from pathlib import Path
 
 from giver.harness.process import spawn
 from giver.harness.protocol import AgentStep
+from giver.harness.toolchains import NODE
 
 
 class ClaudeCodeHarness:
@@ -30,6 +31,7 @@ class ClaudeCodeHarness:
     ports: tuple[str, ...] = ()
     repl_cmd = ("claude",)
     install = "npm install -g @anthropic-ai/claude-code"
+    toolchain = NODE
 
     _VENDORS = frozenset({"anthropic"})
 

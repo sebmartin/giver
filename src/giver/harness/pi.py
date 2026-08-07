@@ -4,6 +4,7 @@ import logging
 
 from giver.harness.process import spawn
 from giver.harness.protocol import AgentStep
+from giver.harness.toolchains import NODE
 
 
 class PiHarness:
@@ -22,6 +23,7 @@ class PiHarness:
     ports = ("53692:53692",)
     repl_cmd = ("pi",)
     install = "npm install -g --ignore-scripts @earendil-works/pi-coding-agent"
+    toolchain = NODE
 
     # `--fork <id>` branches rather than continuing in place.
     forks_on_resume = True

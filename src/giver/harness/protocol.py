@@ -36,6 +36,12 @@ class Harness(Protocol):
     repl_cmd: tuple[str, ...]  # interactive launch argv
     install: str  # shell command that installs it; one generated RUN line
 
+    # What `install` needs to already be there — the command, not a name give'r
+    # looks up. Harnesses sharing a prerequisite share a constant from
+    # `toolchains`, so the generated image installs it once however many
+    # harnesses it carries. None when `install` stands alone.
+    toolchain: str | None
+
     # Can it branch a session instead of continuing it in place? Branching
     # leaves the parent untouched, which is what makes replaying a step safe.
     # pi and claude-code can; codex cannot. Read it rather than assume it.

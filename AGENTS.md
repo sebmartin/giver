@@ -17,7 +17,9 @@ uv run pytest -v     # verbose
 
 - **The kernel runs inside Docker.** The CLI runs on the host, invokes `docker run`, and streams output back. Do not add interactive or host-signaling logic to the kernel.
 - **Agent-CLI knowledge lives in `giver/harness/`.** One class per harness holds everything about that program — how to invoke it headless, how to parse its event stream, what infrastructure it needs, how it gets into an image. `AgentNode` delegates to it and knows nothing else; the execution core (scheduler, logging) and every other node stay harness-ignorant. The harness package depends on neither `cli` nor `kernel`, and both read it.
-- **A harness states what it needs, never where it lands.** `~/.pi/agent`, not `/root/.pi/agent`. Deriving Docker words — volume names, container paths, `-v`/`-e`/`-p` — is the CLI's job, because a local no-container mode is planned.
+- **A harness states what it needs, never where it lands.** `~/.pi/agent`, not `/home/giver/.pi/agent`. Deriving Docker words — volume names, container paths, `-v`/`-e`/`-p`, the Dockerfile itself — is the CLI's job, because a local no-container mode is planned.
+- **The image is generated, never hand-written.** It carries pi plus the harnesses a workflow names, built from each harness's `install` and `toolchain`. Nothing enumerates harnesses in a Dockerfile.
+- **The container is an ordinary Unix box.** A real account, a writable `$HOME`, a working directory the user owns. The kernel must not be able to tell it is in a sandbox, and no uid is baked into an image — `giver.entrypoint` creates the account for whatever uid it is handed, then drops to it.
 - **`run` is a contract, not a spawn.** "Execute these steps, stream to the log, return status." Both shipped harnesses shell out, but nothing in the interface may assume a subprocess — an in-process harness has to stay buildable.
 - **Bash nodes carry their own command.** The execution core runs what a node gives it and never branches on node type.
 - **No hardcoded workflows.** Workflows are user-provided YAML. give'r ships none.

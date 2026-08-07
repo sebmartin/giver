@@ -37,7 +37,7 @@ giver run workflow.yaml
 
 ## Harnesses
 
-A **harness** is a coding-agent CLI that give'r drives — `pi`, `claude-code` or `codex`. give'r orchestrates; the harness does the agent work. One class describes each one: where it keeps credentials and sessions, what environment and ports it needs, how it gets installed, its REPL command, which vendors it can serve, and how to run a node's steps.
+A **harness** is a coding-agent CLI that give'r drives — `pi`, `claude-code` or `codex`. give'r orchestrates; the harness does the agent work. One class describes each one: where it keeps credentials and sessions, what environment and ports it needs, how it gets installed and what that install needs first, its REPL command, which vendors it can serve, and how to run a node's steps.
 
 Nothing in give'r branches on which harness is running. Anything harness-specific is expressed through a mechanism every harness has, so adding one is a single class.
 
@@ -91,13 +91,36 @@ Missing credentials surface as that harness's own "not logged in" error on first
 ## Usage
 
 ```bash
-giver run workflow.yaml              # builds the image on first use
+giver run workflow.yaml              # builds an image for it, if there isn't one
 giver run --detach workflow.yaml     # prints the container name, exits
 giver cancel giver-my-workflow-1234567890
 
 giver shell [harness]                # bash in the container; omit for a bare shell
 giver chat <harness>                 # the harness's own REPL
+
+giver dockerfile workflow.yaml --dev # print the Dockerfile; build it yourself
 ```
+
+## Images
+
+An image carries exactly the harnesses its workflows name — a pi workflow gets a
+runtime with pi in it and nothing else, not even node. give'r generates the
+Dockerfile from what each harness declares, so adding a harness is still one
+class and no file lists them.
+
+`giver run` builds one when what it needs isn't there, adding to what the image
+already carries rather than replacing it. `LABEL giver.harnesses` — not the tag
+— records the contents, because whoever builds owns the tag.
+
+`giver dockerfile` prints the file for anyone who wants to build their own: CI
+builds it once and runs inside it. It needs `--dev [path]` while `giver` is an
+unregistered name on PyPI, since a generated file that installed it would run
+whoever claims the name inside the container holding every credential.
+
+The image bakes in no user. `giver run` passes the uid it was invoked as, and
+the container creates an account for it before dropping to it — so an image is
+portable, run output on a bind mount belongs to the person who will read it, and
+harnesses that refuse to run as root work.
 
 ## Workflow DSL
 
@@ -154,7 +177,8 @@ Everything resolvable is resolved when the workflow loads, so a typo'd model, an
 - **Harnesses** (`giver/harness/`) — one class per agent CLI, holding everything about that program. Depends on neither the CLI nor the kernel; both read it.
 - **Agent nodes** — multi-step sessions delegated to a harness.
 - **Bash nodes** — deterministic steps: file prep, validation, shell commands.
-- **CLI** — host-side only; owns every Docker word. A harness declares `~/.pi/agent`; turning that into a volume and a container path is the CLI's job, because a local no-container mode is planned.
+- **CLI** — host-side only; owns every Docker word. A harness declares `~/.pi/agent`; turning that into a volume, a container path and a line in a Dockerfile is the CLI's job, because a local no-container mode is planned.
+- **Entrypoint** (`giver/entrypoint.py`) — runs first in every container give'r starts, makes it an ordinary environment for the invoking user, and execs. Skipping it is a no-op, so a runtime somebody else started stays their business.
 
 ## Status
 
@@ -163,7 +187,7 @@ Kernel runs bash and agent nodes with full DAG scheduling; Docker and the CLI ar
 - [x] Kernel — bash nodes, `depends_on`, parallel DAG, multi-step agent nodes, idempotency
 - [x] Docker + CLI — `giver run`, `giver cancel`, `giver shell`, `giver chat`, auto-build, log streaming
 - [x] Harness layer — one class per agent CLI, workflow-declared routing, credential isolation
-- [ ] Generated images — build a runtime containing exactly the harnesses a workflow names
+- [x] Generated images — a runtime containing exactly the harnesses a workflow names, run as the invoking user
 - [ ] Checkpoint and resume — re-run a workflow without redoing completed work
 - [ ] Plugin-mount — skills and workflow definitions mounted into the container
 

@@ -11,6 +11,7 @@ from giver.cli import (
     run,
     shell,
 )
+from giver.harness import CodexHarness, PiHarness
 
 
 def test_container_name_includes_stem():
@@ -30,11 +31,25 @@ def _docker_run(mock, flag):
     )
 
 
-def _mock_side_effects():
+def _build(mock):
+    """The `docker build` call — argv at [0][0], kwargs at [1]."""
+    return next(c for c in mock.call_args_list if "build" in c[0][0])
+
+
+def _mock_side_effects(image_harnesses="claude-code,codex,pi"):
     """Answer each docker call by what it asks for, so a test is not coupled to
-    how many calls a run makes."""
+    how many calls a run makes.
+
+    `image_harnesses` is the label on the local image; None means there is no
+    local image. The default carries everything, so a test about something else
+    never accidentally triggers a build.
+    """
 
     def respond(cmd, *_, **__):
+        if cmd[:3] == ["docker", "image", "inspect"]:
+            if image_harnesses is None:
+                return MagicMock(returncode=1, stdout="")
+            return MagicMock(returncode=0, stdout=f"{image_harnesses}\n")
         if cmd[:2] == ["docker", "wait"]:
             return MagicMock(returncode=0, stdout="0\n")
         return MagicMock(returncode=0)
@@ -45,55 +60,57 @@ def _mock_side_effects():
 # ── _ensure_image ─────────────────────────────────────────────────────────────
 
 
-def test_ensure_image_skips_build_when_image_exists():
-    with patch(
-        "giver.cli.subprocess.run", return_value=MagicMock(returncode=0)
-    ) as mock:
-        _ensure_image()
-
-    calls = _docker_calls(mock)
-    assert ["docker", "image", "inspect", "giver:latest"] in calls
-    assert not any("build" in c for c in calls)
-
-
-def test_ensure_image_builds_from_package_root_not_cwd():
+def test_ensure_image_skips_build_when_the_image_already_carries_them():
     with patch("giver.cli.subprocess.run") as mock:
-        mock.side_effect = [
-            MagicMock(returncode=1),  # docker image inspect → not found
-            MagicMock(returncode=0),  # docker info → daemon running
-            MagicMock(returncode=0),  # docker build
-        ]
-        _ensure_image()
+        mock.side_effect = _mock_side_effects("claude-code,pi")
+        _ensure_image([PiHarness()])
 
-    build_cmd = _docker_calls(mock)[2]
-    assert "build" in build_cmd
-    assert str(_PROJECT_ROOT) in build_cmd
-    assert "." not in build_cmd
+    assert not any("build" in c for c in _docker_calls(mock))
 
 
-def test_ensure_image_builds_only_once_across_calls():
+def test_ensure_image_builds_when_a_named_harness_is_missing():
+    """Build-if-stale, not build-if-absent: a workflow that starts naming a
+    harness the image predates would otherwise die on a missing binary partway
+    through the run."""
     with patch("giver.cli.subprocess.run") as mock:
-        mock.side_effect = [
-            MagicMock(returncode=1),  # 1st call: inspect → not found
-            MagicMock(returncode=0),  # 1st call: docker info
-            MagicMock(returncode=0),  # 1st call: build
-            MagicMock(returncode=0),  # 2nd call: inspect → found
-        ]
-        _ensure_image()
-        _ensure_image()
+        mock.side_effect = _mock_side_effects("pi")
+        _ensure_image([CodexHarness()])
 
-    build_calls = [c for c in _docker_calls(mock) if "build" in c]
-    assert len(build_calls) == 1
+    assert 'LABEL giver.harnesses="codex,pi"' in _build(mock)[1]["input"]
+
+
+def test_ensure_image_keeps_what_the_image_already_carried():
+    """One tag serves every workflow on this machine. Rebuilding to exactly
+    what this run needs would drop what the last one needed, and alternating
+    between two workflows would rebuild on every invocation."""
+    with patch("giver.cli.subprocess.run") as mock:
+        mock.side_effect = _mock_side_effects("claude-code")
+        _ensure_image([PiHarness()])
+
+    assert 'LABEL giver.harnesses="claude-code,pi"' in _build(mock)[1]["input"]
+
+
+def test_ensure_image_feeds_the_dockerfile_in_rather_than_reading_one():
+    """There is no Dockerfile on disk to build. `-f -` takes the file from
+    stdin while still taking a context from the path — `docker build -` would
+    send the context itself and leave the COPY lines nothing to copy."""
+    with patch("giver.cli.subprocess.run") as mock:
+        mock.side_effect = _mock_side_effects(None)
+        _ensure_image([PiHarness()])
+
+    argv, kwargs = _build(mock)[0][0], _build(mock)[1]
+    assert argv == ["docker", "build", "-t", "giver:latest", "-f", "-", str(_PROJECT_ROOT)]
+    assert kwargs["input"].startswith("FROM python:3.13-slim")
 
 
 def test_ensure_image_exits_cleanly_when_docker_not_running():
     with patch("giver.cli.subprocess.run") as mock:
         mock.side_effect = [
-            MagicMock(returncode=1),  # docker image inspect → not found
+            MagicMock(returncode=1),  # docker image inspect → no image
             MagicMock(returncode=1),  # docker info → daemon not running
         ]
         with pytest.raises(SystemExit) as exc:
-            _ensure_image()
+            _ensure_image([PiHarness()])
     assert exc.value.code == 1
 
 

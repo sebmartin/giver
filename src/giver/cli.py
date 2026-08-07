@@ -2,11 +2,12 @@ import argparse
 import subprocess
 import sys
 import time
+from collections.abc import Iterable
 from datetime import datetime, timezone
 from pathlib import Path
 
 from giver.harness import HARNESS_NAMES, HARNESSES, Harness, harness_by_name
-from giver.image import render
+from giver.image import LABEL_KEY, render
 from giver.kernel.nodes.agent import AgentNode
 from giver.kernel.workflow import Workflow
 
@@ -17,19 +18,60 @@ def _container_name(workflow_stem: str) -> str:
 
 _PROJECT_ROOT = Path(__file__).parents[2]
 
+IMAGE = "giver:latest"
 
-def _ensure_image() -> None:
+
+def _image_harnesses() -> set[str] | None:
+    """What the local image carries, or None if there isn't one.
+
+    Read from the label rather than the tag: a tag says nothing about contents,
+    and this is answerable before any container starts.
+    """
     result = subprocess.run(
-        ["docker", "image", "inspect", "giver:latest"],
+        ["docker", "image", "inspect", IMAGE, "--format", f"{{{{index .Config.Labels \"{LABEL_KEY}\"}}}}"],
         capture_output=True,
+        text=True,
     )
-    if result.returncode == 0:
+    if result.returncode != 0:
+        return None
+    return {name for name in result.stdout.strip().split(",") if name}
+
+
+def _ensure_image(harnesses: Iterable[Harness] = ()) -> None:
+    """A local image carrying at least these harnesses.
+
+    Build-if-stale rather than build-if-absent: a workflow that starts naming a
+    harness the image predates would otherwise run against an image without it
+    and fail on a missing binary, deep inside the run.
+    """
+    needed = {harness.name for harness in harnesses}
+    carried = _image_harnesses()
+    if carried is not None and needed <= carried:
         return
+
+    # Accrete rather than replace. The image is a function of the workflow, but
+    # one tag serves every workflow on this machine — rebuilding to exactly what
+    # this run needs would drop what the last one needed, and alternating
+    # between two workflows would rebuild on every invocation.
+    wanted = needed | (carried or set())
+
     if subprocess.run(["docker", "info"], capture_output=True).returncode != 0:
         print("error: Docker is not running", file=sys.stderr)
         sys.exit(1)
+    try:
+        dockerfile_text = render(
+            [harness_by_name(name) for name in sorted(wanted)], dev=_PROJECT_ROOT
+        )
+    except ValueError as e:
+        print(f"error: {e}", file=sys.stderr)
+        sys.exit(1)
+    # `-f -` reads the Dockerfile from stdin while still taking a build context
+    # from the path — `docker build -` would send the context itself and leave
+    # the COPY lines nothing to copy.
     result = subprocess.run(
-        ["docker", "build", "-t", "giver:latest", str(_PROJECT_ROOT)],
+        ["docker", "build", "-t", IMAGE, "-f", "-", str(_PROJECT_ROOT)],
+        input=dockerfile_text,
+        text=True,
     )
     if result.returncode != 0:
         print("error: image build failed", file=sys.stderr)
@@ -83,7 +125,9 @@ def _harnesses_for(*workflow_paths: Path) -> list[Harness]:
     return [harness_by_name(name) for name in sorted(named)]
 
 
-def _run_container(workflow_abs: Path, runs_dir: Path, name: str) -> None:
+def _run_container(
+    workflow_abs: Path, runs_dir: Path, name: str, harnesses: list[Harness]
+) -> None:
     cmd = [
         "docker", "run", "-d",
         "--name", name,
@@ -95,9 +139,9 @@ def _run_container(workflow_abs: Path, runs_dir: Path, name: str) -> None:
     # no reason to be holding Claude Code's token. Mounted writable — harnesses
     # write session transcripts as they work and rewrite credential files when a
     # token refreshes.
-    for harness in _harnesses_for(workflow_abs):
+    for harness in harnesses:
         cmd += _harness_args(harness, interactive=False)
-    cmd += ["giver:latest", "/workflow.yaml"]
+    cmd += [IMAGE, "/workflow.yaml"]
     subprocess.run(cmd)
 
 
@@ -110,18 +154,21 @@ def _interactive(harness_name: str | None, entrypoint: list[str]) -> int:
     mounts has to reconcile that first, and here is the only place give'r code
     runs on this path.
     """
-    _ensure_image()
-    cmd = ["docker", "run", "--rm", "-it"]
-    prepare: list[str] = []
+    harnesses: list[Harness] = []
     if harness_name is not None:
         try:
-            harness = harness_by_name(harness_name)
+            harnesses = [harness_by_name(harness_name)]
         except ValueError as e:
             print(f"error: {e}", file=sys.stderr)
             return 1
+
+    _ensure_image(harnesses)
+    cmd = ["docker", "run", "--rm", "-it"]
+    prepare: list[str] = []
+    for harness in harnesses:
         cmd += _harness_args(harness, interactive=True)
         prepare = ["--harness", harness.name]
-    cmd += ["--entrypoint", "python", "giver:latest"]
+    cmd += ["--entrypoint", "python", IMAGE]
     cmd += ["-m", "giver.harness", *prepare, "--", *entrypoint]
     return subprocess.run(cmd).returncode
 
@@ -157,8 +204,9 @@ def run(workflow_path: Path, runs_dir: Path | None = None, detach: bool = False)
     name = _container_name(workflow_path.stem)
     _log(runs_dir, f"start container={name} workflow={workflow_abs} at {datetime.now(timezone.utc).isoformat()}")
 
-    _ensure_image()
-    _run_container(workflow_abs, runs_dir, name)
+    harnesses = _harnesses_for(workflow_abs)
+    _ensure_image(harnesses)
+    _run_container(workflow_abs, runs_dir, name, harnesses)
 
     if detach:
         print(name)

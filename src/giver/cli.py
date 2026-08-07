@@ -5,7 +5,8 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from giver.harness import HARNESS_NAMES, Harness, harness_by_name
+from giver.harness import HARNESS_NAMES, HARNESSES, Harness, harness_by_name
+from giver.image import render
 from giver.kernel.nodes.agent import AgentNode
 from giver.kernel.workflow import Workflow
 
@@ -65,15 +66,20 @@ def _harness_args(harness: Harness, interactive: bool) -> list[str]:
     return args + ["-v", f"{_volume(harness)}:{_container_path(harness)}"]
 
 
-def _harnesses_for(workflow_abs: Path) -> list[Harness]:
-    """The harnesses a workflow's agent nodes actually name.
+def _harnesses_for(*workflow_paths: Path) -> list[Harness]:
+    """The harnesses these workflows' agent nodes actually name.
 
     Parsing the workflow host-side means an unknown harness or an unresolvable
     model is reported here, before a container exists, using the same code the
     kernel will run inside it.
+
+    Takes several because an image is built for a set of workflows, even though
+    a run only ever concerns one.
     """
-    workflow = Workflow.from_file(workflow_abs)
-    named = {n.harness_name for n in workflow.nodes if isinstance(n, AgentNode)}
+    named: set[str] = set()
+    for path in workflow_paths:
+        workflow = Workflow.from_file(path)
+        named |= {n.harness_name for n in workflow.nodes if isinstance(n, AgentNode)}
     return [harness_by_name(name) for name in sorted(named)]
 
 
@@ -167,6 +173,28 @@ def cancel(name: str) -> int:
     return subprocess.run(["docker", "stop", name]).returncode
 
 
+def dockerfile(workflows: list[Path] | None = None, dev: Path | None = None) -> int:
+    """Print the Dockerfile for a runtime carrying these workflows' harnesses.
+
+    give'r does not build images for anyone but itself — this is what a CI
+    pipeline, or anyone who wants their own runtime, builds from. With no
+    workflow named it emits every registered harness, which is the image that
+    can run anything.
+    """
+    # A workflow of nothing but bash nodes names no harness and should get an
+    # image carrying none — which is not the same as naming no workflow at all.
+    if workflows:
+        harnesses = _harnesses_for(*(w.resolve() for w in workflows))
+    else:
+        harnesses = list(HARNESSES)
+    try:
+        print(render(harnesses, dev=dev), end="")
+    except ValueError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
+    return 0
+
+
 def _log(runs_dir: Path, message: str) -> None:
     with (runs_dir / "runs.log").open("a") as f:
         f.write(message + "\n")
@@ -194,6 +222,23 @@ def main() -> None:
     chat_p = sub.add_parser("chat", help="open a harness's own REPL in the giver container")
     chat_p.add_argument("harness", choices=HARNESS_NAMES, help="harness to launch")
 
+    dockerfile_p = sub.add_parser("dockerfile", help="print the Dockerfile for a runtime")
+    dockerfile_p.add_argument(
+        "workflow",
+        nargs="*",
+        type=Path,
+        help="workflows the image is for (omit for every registered harness)",
+    )
+    dockerfile_p.add_argument(
+        "--dev",
+        nargs="?",
+        const=Path("."),
+        default=None,
+        type=Path,
+        metavar="PATH",
+        help="build give'r from this checkout rather than from PyPI (default: .)",
+    )
+
     args = parser.parse_args()
     if args.command == "run":
         sys.exit(run(args.workflow, detach=args.detach))
@@ -203,3 +248,5 @@ def main() -> None:
         sys.exit(shell(args.harness))
     elif args.command == "chat":
         sys.exit(chat(args.harness))
+    elif args.command == "dockerfile":
+        sys.exit(dockerfile(args.workflow, dev=args.dev))

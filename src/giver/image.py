@@ -1,0 +1,92 @@
+"""The Dockerfile for a runtime carrying a given set of harnesses.
+
+An image is a function of the workflows it is built for: a harness is installed
+because a workflow asked for it, which is what lets routing decide where a step
+runs without first checking what happens to be present. Writing that file by
+hand meant enumerating harnesses in it, so adding one meant editing it — the
+one thing give'r is not allowed to make anyone do.
+
+give'r generates the file and does not build it. `giver dockerfile` prints it
+for whoever wants an image; the CLI pipes the same text to `docker build` for
+local runs. Both go through `render`, so what CI builds and what you run are
+the same bytes.
+
+`LABEL giver.harnesses` — not the tag — records what came out, because whoever
+builds owns the tag and its shape cannot be relied on. It is readable with
+`docker image inspect` before a container starts.
+"""
+
+from collections.abc import Iterable
+from pathlib import Path
+
+from giver.harness import Harness
+
+BASE_IMAGE = "python:3.13-slim"
+
+# What an image carries, recorded where it can be read back without running it.
+LABEL_KEY = "giver.harnesses"
+
+
+def render(harnesses: Iterable[Harness], dev: Path | None = None) -> str:
+    """The Dockerfile for a runtime carrying exactly `harnesses`.
+
+    `dev` is a give'r checkout to build from. It is not written into the file —
+    it is the build context — but whether there is one decides how give'r
+    installs itself.
+
+    Sorted by harness name so the same set always renders the same bytes:
+    regenerating and diffing catches drift, and Docker's layer cache is not
+    thrown away by an incidental reordering.
+    """
+    harnesses = sorted(harnesses, key=lambda h: h.name)
+
+    sections = [
+        [f"FROM {BASE_IMAGE}"],
+        [f"RUN {command}" for command in _toolchains(harnesses)]
+        + [f"RUN {harness.install}" for harness in harnesses],
+        _install_giver(dev),
+        [
+            f'LABEL {LABEL_KEY}="{",".join(h.name for h in harnesses)}"',
+            'ENTRYPOINT ["python", "-m", "giver.kernel"]',
+        ],
+    ]
+    return "\n\n".join("\n".join(s) for s in sections if s) + "\n"
+
+
+def _toolchains(harnesses: list[Harness]) -> list[str]:
+    """Each distinct prerequisite, once, in the order first asked for.
+
+    Deduplicated by string equality: harnesses that share a prerequisite share
+    a constant, so an image carrying three npm harnesses installs node once.
+    Nothing here knows what any of these commands do.
+    """
+    seen: list[str] = []
+    for harness in harnesses:
+        if harness.toolchain and harness.toolchain not in seen:
+            seen.append(harness.toolchain)
+    return seen
+
+
+def _install_giver(dev: Path | None) -> list[str]:
+    """Install give'r itself, from a checkout.
+
+    The published form — `pip install giver==<version>`, no build context, so
+    the file stands alone — is where this is going. It cannot be the default
+    while `giver` is an unregistered name on PyPI: a generated file that
+    installs it would, the moment someone claims the name, run their code in
+    the one container that holds every harness credential. Delete this branch
+    and emit the version once the name is ours.
+    """
+    if dev is None:
+        raise ValueError(
+            "give'r is not published to PyPI, so an image can only be built "
+            "from a checkout — pass --dev [path]"
+        )
+    if not (dev / "pyproject.toml").exists():
+        raise ValueError(f"no pyproject.toml under {dev} — not a give'r checkout")
+    return [
+        "WORKDIR /app",
+        "COPY pyproject.toml uv.lock ./",
+        "COPY src/ ./src/",
+        "RUN pip install .",
+    ]

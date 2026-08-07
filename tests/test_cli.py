@@ -7,6 +7,7 @@ from giver.cli import (
     _ensure_image,
     cancel,
     chat,
+    dockerfile,
     run,
     shell,
 )
@@ -314,6 +315,48 @@ def test_chat_launches_the_harness_repl_with_the_same_provisioning():
 def test_chat_unknown_harness_returns_1():
     with patch("giver.cli.subprocess.run", return_value=MagicMock(returncode=0)):
         assert chat("unknown") == 1
+
+
+# ── dockerfile ────────────────────────────────────────────────────────────────
+
+
+def test_dockerfile_carries_only_the_harnesses_the_workflows_name(tmp_path, capsys):
+    wf = _agent_workflow(tmp_path, "pi")
+
+    assert dockerfile([wf], dev=_PROJECT_ROOT) == 0
+
+    out = capsys.readouterr().out
+    assert 'LABEL giver.harnesses="pi"' in out
+    assert "@anthropic-ai/claude-code" not in out
+
+
+def test_dockerfile_unions_the_harnesses_across_workflows(tmp_path, capsys):
+    """An image is built for a set of workflows, not for one — CI has several
+    and wants one runtime that runs all of them."""
+    a, b = tmp_path / "a", tmp_path / "b"
+    a.mkdir()
+    b.mkdir()
+    pi_wf = _agent_workflow(a, "pi")
+    claude_wf = _agent_workflow(b, "claude-code")
+
+    assert dockerfile([pi_wf, claude_wf], dev=_PROJECT_ROOT) == 0
+
+    assert 'LABEL giver.harnesses="claude-code,pi"' in capsys.readouterr().out
+
+
+def test_dockerfile_without_a_workflow_carries_every_harness(capsys):
+    """Nothing to derive a set from, so emit the runtime that runs anything."""
+    assert dockerfile(dev=_PROJECT_ROOT) == 0
+
+    assert 'LABEL giver.harnesses="claude-code,codex,pi"' in capsys.readouterr().out
+
+
+def test_dockerfile_without_dev_fails_rather_than_reaching_for_pypi(capsys):
+    """`giver` is an unregistered PyPI name; a generated file that installed it
+    would run whoever claims it inside the credential container."""
+    assert dockerfile(dev=None) == 1
+
+    assert "not published to PyPI" in capsys.readouterr().err
 
 
 # ── cancel ────────────────────────────────────────────────────────────────────

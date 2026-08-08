@@ -1,23 +1,7 @@
-"""Make the container an ordinary environment for the user who ran give'r,
-then become the program that was asked for.
+"""Impersonate the uid in `GIVER_UID`, then exec the command.
 
-Nothing above this should be able to tell it is in a sandbox. A workflow runs
-arbitrary programs, and those programs expect what any Unix machine provides: an
-account, a writable home directory, and a working directory they own. Anything
-missing shows up later as a failure in whatever workflow first depends on it.
-
-The uid cannot be baked into the image. give'r is a tool other people build and
-publish images for, and a uid only ever matches the machine that chose it —
-Docker has no facility for mapping one to another (`--userns` takes only
-`host`; the per-container mapping podman calls `keep-id` has no equivalent).
-So the image carries no user at all and this creates one, for whatever uid it
-is told, before dropping to it.
-
-With no `GIVER_UID` it execs unchanged, for the case where somebody else started
-the container: a CI job container has its own user, home and mounts, and has
-already done this job. It checks for both first, because the image give'r
-generates has neither, and running it directly would otherwise land as root in
-a home that does not exist.
+Creates the account, takes ownership of its home and harness state, and drops
+privileges. With `GIVER_UID` unset it execs as whoever it already is.
 """
 
 import grp
@@ -26,8 +10,6 @@ import pwd
 import subprocess
 import sys
 from pathlib import Path
-
-from giver.harness import HARNESSES
 
 HOME = "/home/giver"
 WORKDIR = "/work"
@@ -41,58 +23,48 @@ def main(argv: list[str] | None = None) -> None:
         raise SystemExit(1)
 
     requested = os.environ.get("GIVER_UID")
-    if requested is None:
-        # No uid was sent, so the container keeps the one the image started as.
-        _ensure_not_root(os.geteuid())
-        _ensure_writable_home()
-        os.execvp(argv[0], argv)
-        return  # execvp replaces this process; returning is not control flow
+    uid = int(requested or os.geteuid())
+    _require_not_root(uid)
 
-    uid = int(requested)
-    gid = int(os.environ.get("GIVER_GID") or uid)
-    _ensure_not_root(uid)
+    if requested:
+        # Impersonate the requested identity
+        gid = int(os.environ.get("GIVER_GID") or uid)
+        name = _ensure_account(uid, gid)
+        _take_ownership(uid, gid)
+        _become(name, uid, gid)
+    else:
+        _require_writable_home()
 
-    name = _ensure_account(uid, gid)
-    _take_ownership(uid, gid)
-    _become(name, uid, gid)
     os.execvp(argv[0], argv)
 
 
-def _ensure_not_root(uid: int) -> None:
-    """Exit when the container would run as uid 0.
+def _require_not_root(uid: int) -> None:
+    """Exit when the process would run as uid 0.
 
-    claude-code refuses to run headless as root (issue #9), and on Linux the
-    uid crosses the /runs bind mount, so artifacts come out root-owned.
+    claude-code refuses to run headless as root (issue #9), and files it writes
+    are then owned by someone the caller cannot delete.
     """
     if uid != 0:
         return
     print(
-        "error: this container would run as root. Harnesses that refuse to run "
-        "privileged will fail, and anything written to /runs comes out "
-        "root-owned. Run give'r as an unprivileged user, or start the container "
-        "with -e GIVER_UID=$(id -u) -e GIVER_GID=$(id -g).",
+        "error: refusing to run as root, because harnesses that refuse to run "
+        "privileged will fail. Set GIVER_UID to an unprivileged uid.",
         file=sys.stderr,
     )
     raise SystemExit(1)
 
 
-def _ensure_writable_home() -> None:
+def _require_writable_home() -> None:
     """Exit when `$HOME` is missing or not writable.
 
-    Harnesses resolve `~` from `$HOME`, and the image give'r generates has no
-    user and no home, so `docker run --user 1000` on it would write every
-    credential to a dangling path.
-
-    Runs after `_ensure_not_root`: `os.access` reports almost everything as
-    writable to root.
+    Harnesses resolve `~` from `$HOME`. Runs after `_require_not_root`, since
+    `os.access` reports almost everything as writable to root.
     """
     home = Path(os.environ.get("HOME", HOME))
     if home.is_dir() and os.access(home, os.W_OK):
         return
     print(
-        f"error: $HOME ({home}) does not exist or is not writable. An image "
-        "give'r generated carries no user; run it with -e GIVER_UID=$(id -u) "
-        "-e GIVER_GID=$(id -g) and this entrypoint will make the account.",
+        f"error: $HOME ({home}) does not exist or is not writable. Set GIVER_UID to have the account and home created.",
         file=sys.stderr,
     )
     raise SystemExit(1)
@@ -101,10 +73,8 @@ def _ensure_writable_home() -> None:
 def _ensure_account(uid: int, gid: int) -> str:
     """Create a passwd entry for this uid, and a home to go with it.
 
-    The group has to come first and separately: `useradd -g` fails outright if
-    that gid has no group, and Debian has no gid 1000 — the primary gid of the
-    first user on most Linux hosts. macOS hides this, because gid 20 happens to
-    exist there as `dialout`.
+    The group comes first because `useradd -g` fails when that gid has no
+    group, and Debian ships no gid 1000.
     """
     try:
         grp.getgrgid(gid)
@@ -115,22 +85,16 @@ def _ensure_account(uid: int, gid: int) -> str:
         return pwd.getpwuid(uid).pw_name
     except KeyError:
         pass
-    # -o because a uid colliding with one the base image ships is the caller's
-    # uid, not a mistake we get to refuse.
-    _quietly(
-        ["useradd", "-o", "-u", str(uid), "-g", str(gid),
-         "-m", "-d", HOME, "-s", "/bin/bash", USER]
-    )
+
+    _quietly(["useradd", "-u", str(uid), "-g", str(gid), "-m", "-d", HOME, "-s", "/bin/bash", USER])
     return USER
 
 
 def _quietly(cmd: list[str]) -> None:
-    """Run it, and say nothing unless it fails.
+    """Run `cmd`, printing only when it fails.
 
-    These are chatty about things that are not problems here — a macOS uid is
-    below Debian's UID_MIN, and the home directory always already exists
-    because a mount created it. Every container start would otherwise open with
-    a warning about neither.
+    `useradd` warns on every start about a macOS uid below Debian's UID_MIN and
+    about a home directory a mount already created.
     """
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
@@ -139,60 +103,52 @@ def _quietly(cmd: list[str]) -> None:
 
 
 def _take_ownership(uid: int, gid: int) -> None:
-    """Hand this user its home, its working directory and its harness state.
+    """Give this user its home and working directory, and all their contents.
 
-    `useradd -m` creates a home only when there isn't one, and by the time this
-    runs there always is: mounting a volume at `~/.pi/agent` makes Docker create
-    every directory above it first, owned by root. Docker also creates the
-    volume itself root-owned when the image carries nothing at that path, which
-    is the whole of the provisioning problem — a non-root container cannot write
-    the directory holding the credentials it was started to use.
-
-    Recursive only when the top-level owner is wrong, so first use pays for a
-    volume written by an older give'r and every run after it pays one stat.
+    Docker creates a volume's mount point, and the directories above it, owned
+    by root, so this runs on every start.
     """
-    home = Path(HOME)
+    home, work = Path(HOME), Path(WORKDIR)
     home.mkdir(parents=True, exist_ok=True)
-    _own(home, uid, gid)
-    # A home a mount created is 0755; one `useradd -m` created is 0700. Settle
-    # it, so a home does not differ by whether anything happened to be mounted.
+    work.mkdir(parents=True, exist_ok=True)
+
+    to_chown = _unowned(work, uid)
+    # $HOME does not stand for what is under it: a volume mounted into an
+    # already-converted home still arrives owned by root.
+    for child in home.iterdir():
+        to_chown += _unowned(child, uid)
+    if home.stat().st_uid != uid:
+        to_chown.append(home)
+
+    for path in to_chown:
+        os.chown(path, uid, gid)
+    # Docker leaves a mounted home 0755; `useradd -m` makes one 0700.
     home.chmod(0o700)
 
-    work = Path(WORKDIR)
-    work.mkdir(parents=True, exist_ok=True)
-    _own(work, uid, gid)
 
-    for harness in HARNESSES:
-        state = Path(harness.state_path).expanduser()
-        # Present because it was mounted. A harness this image doesn't carry
-        # has no directory and needs none.
-        if not state.exists():
-            continue
-        # Docker creates ~/.pi on its way to mounting ~/.pi/agent and leaves it
-        # root-owned, inside a home this user owns.
-        for parent in _under_home(state):
-            _own(parent, uid, gid)
-        if state.stat().st_uid != uid:
-            _quietly(["chown", "-R", f"{uid}:{gid}", str(state)])
+def _unowned(path: Path, uid: int) -> list[Path]:
+    """Return what `path` covers that `uid` does not own, contents first.
 
-
-def _own(path: Path, uid: int, gid: int) -> None:
-    if path.stat().st_uid != uid:
-        os.chown(path, uid, gid)
-
-
-def _under_home(state: Path) -> list[Path]:
-    """The directories between the home directory and `state`, exclusive."""
-    home, parents, path = Path(HOME), [], state.parent
-    while path != home and path != path.parent:
-        parents.append(path)
-        path = path.parent
-    return parents
+    A directory this user already owns is skipped whole, since an earlier run
+    converted everything below it. Contents come first so a directory is
+    chowned after everything under it, and a run that dies partway is repeated
+    rather than skipped.
+    """
+    if path.stat().st_uid == uid:
+        return []
+    below: list[Path] = []
+    if path.is_dir():
+        for child in path.iterdir():
+            below += _unowned(child, uid)
+    return below + [path]
 
 
 def _become(name: str, uid: int, gid: int) -> None:
-    """Drop, in the order the kernel allows: supplementary groups and the
-    primary group while still privileged, the uid last."""
+    """Drop privileges to `uid` and `gid`.
+
+    Groups first: `setuid` gives away the privilege that `initgroups` and
+    `setgid` require.
+    """
     os.initgroups(name, gid)
     os.setgid(gid)
     os.setuid(uid)

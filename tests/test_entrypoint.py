@@ -36,7 +36,7 @@ def container(tmp_path, monkeypatch):
     return SimpleNamespace(home=home, work=work, mount=mount)
 
 
-def _drive(argv, env, existing_uids=(0,), existing_gids=(0,), running_as=1000):
+def _drive(argv, env, existing_uids=(0,), existing_gids=(0,), running_as=0):
     """Run `main`, with the account database and privilege drop stubbed.
 
     `existing_uids`/`existing_gids` are what /etc/passwd and /etc/group already
@@ -44,10 +44,10 @@ def _drive(argv, env, existing_uids=(0,), existing_gids=(0,), running_as=1000):
     runs the tests, so asking for that uid means nothing needs chowning and
     asking for another means everything does.
 
-    `running_as` is the uid the container already has, which only matters on the
-    path where nobody sent one. Stubbed so a suite run inside a container — as
-    root, the obvious way to exercise this file for real — does not take a
-    different branch than the same suite run on a laptop.
+    `running_as` is the uid the container starts as, and defaults to root
+    because the generated image carries no user. Stubbed rather than read from
+    the process, so a suite run inside a container takes the same branch as one
+    run on a laptop.
     """
     with (
         patch.dict(os.environ, env),
@@ -71,7 +71,7 @@ def _drive(argv, env, existing_uids=(0,), existing_gids=(0,), running_as=1000):
     return SimpleNamespace(
         execvp=execvp.call_args,
         shell=[c[0][0] for c in sub.call_args_list],
-        chowned={Path(c[0][0]) for c in chown.call_args_list},
+        chowned=[Path(c[0][0]) for c in chown.call_args_list],
         became=(initgroups.call_args, setgid.call_args, setuid.call_args),
     )
 
@@ -89,7 +89,7 @@ def test_execs_untouched_without_a_uid(container):
     a no-op, or every such runtime becomes a special case."""
     container.home.mkdir(parents=True)
 
-    result = _drive(["python", "-m", "giver.kernel"], env={})
+    result = _drive(["python", "-m", "giver.kernel"], env={}, running_as=1000)
 
     assert result.execvp == call("python", ["python", "-m", "giver.kernel"])
     assert (result.shell, result.became) == ([], (None, None, None))
@@ -138,7 +138,7 @@ def test_creates_the_group_before_the_user(container):
     result = _drive(["bash"], env={"GIVER_UID": "1000", "GIVER_GID": "1000"})
 
     assert result.shell[0] == ["groupadd", "-g", "1000", "giver"]
-    assert result.shell[1][:6] == ["useradd", "-o", "-u", "1000", "-g", "1000"]
+    assert result.shell[1][:5] == ["useradd", "-u", "1000", "-g", "1000"]
 
 
 def test_reuses_a_group_that_already_exists(container):
@@ -175,7 +175,7 @@ def test_gid_defaults_to_the_uid(container):
 def test_gives_the_user_a_home_and_a_working_directory(container):
     result = _drive(["bash"], env={"GIVER_UID": str(SOMEONE_ELSE)})
 
-    assert {container.home, container.work} <= result.chowned
+    assert {container.home, container.work} <= set(result.chowned)
 
 
 def test_home_is_private_however_it_came_to_exist(container):
@@ -190,15 +190,22 @@ def test_home_is_private_however_it_came_to_exist(container):
 
 
 def test_takes_ownership_of_state_written_by_an_earlier_root_container(container):
-    """Docker creates a volume root-owned when the image carries nothing at
-    that path, and everything an older give'r wrote into one belongs to root.
-    A top-level chown would leave a writable directory full of unreadable
-    credentials — which reads as logged out with a valid token inside it."""
-    container.mount(".pi/agent")
+    """Everything an older give'r wrote into a volume belongs to root, and each
+    directory is claimed after its contents. Claiming a directory first would
+    record it as converted while the credentials inside it stayed unreadable,
+    which reads as logged out with a valid token next to it."""
+    agent = container.mount(".pi/agent")
+    (agent / "auth.json").write_text("{}")
 
     result = _drive(["bash"], env={"GIVER_UID": str(SOMEONE_ELSE), "GIVER_GID": "20"})
 
-    assert ["chown", "-R", f"{SOMEONE_ELSE}:20", str(container.home / ".pi/agent")] in result.shell
+    assert result.chowned == [
+        container.work,
+        agent / "auth.json",
+        agent,
+        container.home / ".pi",
+        container.home,
+    ]
 
 
 def test_claims_the_directories_a_mount_created_on_its_way_down(container):
@@ -219,8 +226,7 @@ def test_leaves_state_alone_once_it_is_already_owned(container):
 
     result = _drive(["bash"], env={"GIVER_UID": str(MINE)})
 
-    assert not any(c[0] == "chown" for c in result.shell)
-    assert result.chowned == set()
+    assert result.chowned == []
 
 
 def test_ignores_state_for_a_harness_this_image_does_not_carry(container):

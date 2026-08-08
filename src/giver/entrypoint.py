@@ -107,7 +107,7 @@ def _ensure_writable_home() -> None:
 
 
 def _ensure_account(uid: int, gid: int) -> str:
-    """An account for this uid, so `~` resolves the ordinary way.
+    """Create a passwd entry for this uid, and a home to go with it.
 
     The group has to come first and separately: `useradd -g` fails outright if
     that gid has no group, and Debian has no gid 1000 — the primary gid of the

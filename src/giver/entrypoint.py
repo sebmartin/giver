@@ -15,8 +15,9 @@ is told, before dropping to it.
 
 With no `GIVER_UID` it execs unchanged, for the case where somebody else started
 the container: a CI job container has its own user, home and mounts, and has
-already done this job. It checks for that home first, because the image give'r
-generates has neither a user nor a home and would otherwise exec as root.
+already done this job. It checks for both first, because the image give'r
+generates has neither, and running it directly would otherwise land as root in
+a home that does not exist.
 """
 
 import grp
@@ -41,24 +42,17 @@ def main(argv: list[str] | None = None) -> None:
 
     requested = os.environ.get("GIVER_UID")
     if requested is None:
-        _require_a_home_already()
+        # Nobody handed us a uid, so we are whoever the image starts as and
+        # nothing here can change that. Both checks are about the container we
+        # were given rather than one we are about to make.
+        _refuse_root(os.geteuid())
+        _refuse_a_home_that_is_not_there()
         os.execvp(argv[0], argv)
         return  # execvp replaces this process; returning is not control flow
 
     uid = int(requested)
     gid = int(os.environ.get("GIVER_GID") or uid)
-    if uid == 0:
-        # `sudo giver run`. Dropping to root is not dropping, and a harness
-        # running unattended as root is what issue #9 was: claude-code refuses
-        # the combination outright, so this would fail anyway — several minutes
-        # later, reported as a harness error rather than as its cause.
-        print(
-            "error: give'r was run as root, and the container would run as root too. "
-            "Harnesses that refuse to run privileged will fail. Run give'r as "
-            "an unprivileged user.",
-            file=sys.stderr,
-        )
-        raise SystemExit(1)
+    _refuse_root(uid)
 
     name = _ensure_account(uid, gid)
     _take_ownership(uid, gid)
@@ -66,17 +60,41 @@ def main(argv: list[str] | None = None) -> None:
     os.execvp(argv[0], argv)
 
 
-def _require_a_home_already() -> None:
+def _refuse_root(uid: int) -> None:
+    """Root is not a user to drop to, and harnesses will not run as one.
+
+    claude-code refuses to run headless as uid 0 (issue #9), so a workflow that
+    reaches a harness fails several minutes in and reports it as a harness
+    error. On Linux the uid also crosses the /runs bind mount unchanged, so the
+    logs and artifacts come out owned by a user who cannot delete them.
+
+    Applies to a uid give'r sent and to the one we already are, because the
+    reason is the same either way.
+    """
+    if uid != 0:
+        return
+    print(
+        "error: this container would run as root. Harnesses that refuse to run "
+        "privileged will fail, and anything written to /runs comes out "
+        "root-owned. Run give'r as an unprivileged user, or start the container "
+        "with -e GIVER_UID=$(id -u) -e GIVER_GID=$(id -g).",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+
+
+def _refuse_a_home_that_is_not_there() -> None:
     """Refuse to exec into a container nobody has set up.
 
     An unset `GIVER_UID` was taken to mean somebody else started this container
     and has already done the setup. The image give'r generates carries no user,
-    so `docker run` on it lands as root with `$HOME` set to a directory that
-    `useradd -m` never created. Harnesses resolve `~` from `$HOME` and would
-    write their credentials into a path that does not exist.
+    so a `docker run --user 1000` on it clears the root check above and still
+    has `$HOME` pointing at a directory `useradd -m` never created. Harnesses
+    resolve `~` from `$HOME` and would write their credentials into a path that
+    is not there.
 
-    Testing for the home covers that at any uid, including `docker run --user`,
-    and costs a container someone else set up one stat.
+    Only meaningful below root, for whom almost everything is writable — which
+    is why the root check comes first rather than this standing alone.
     """
     home = Path(os.environ.get("HOME", HOME))
     if home.is_dir() and os.access(home, os.W_OK):

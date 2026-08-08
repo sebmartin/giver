@@ -36,16 +36,22 @@ def container(tmp_path, monkeypatch):
     return SimpleNamespace(home=home, work=work, mount=mount)
 
 
-def _drive(argv, env, existing_uids=(0,), existing_gids=(0,)):
+def _drive(argv, env, existing_uids=(0,), existing_gids=(0,), running_as=1000):
     """Run `main`, with the account database and privilege drop stubbed.
 
     `existing_uids`/`existing_gids` are what /etc/passwd and /etc/group already
     hold. Ownership is not stubbed: the directories are really owned by whoever
     runs the tests, so asking for that uid means nothing needs chowning and
     asking for another means everything does.
+
+    `running_as` is the uid the container already has, which only matters on the
+    path where nobody sent one. Stubbed so a suite run inside a container — as
+    root, the obvious way to exercise this file for real — does not take a
+    different branch than the same suite run on a laptop.
     """
     with (
         patch.dict(os.environ, env),
+        patch("giver.entrypoint.os.geteuid", return_value=running_as),
         patch("giver.entrypoint.os.execvp") as execvp,
         patch("giver.entrypoint.subprocess.run") as sub,
         patch("giver.entrypoint.os.initgroups") as initgroups,
@@ -90,12 +96,24 @@ def test_execs_untouched_without_a_uid(container):
 
 
 def test_refuses_to_exec_into_a_container_with_no_home(container):
-    """The image give'r generates carries no user, so `docker run` on it with
-    no uid lands as root in a `$HOME` nothing created — and every harness reads
-    `~` from `$HOME`. An unset `GIVER_UID` cannot tell that apart from a real
-    CI container; the home it claims to have can."""
+    """`docker run --user 1000` on a generated image is not root, so it clears
+    that check and still has `$HOME` pointing at a directory `useradd -m` never
+    created. Every harness reads `~` from `$HOME`."""
     with pytest.raises(SystemExit) as exc:
-        _drive(["python", "-m", "giver.kernel"], env={})
+        _drive(["python", "-m", "giver.kernel"], env={}, running_as=1000)
+
+    assert exc.value.code == 1
+
+
+def test_refuses_to_exec_into_a_container_already_running_as_root(container):
+    """A writable home is no evidence at uid 0, where almost everything is
+    writable — mounting any volume over `$HOME` would satisfy it. So running as
+    root is refused before the home is looked at, the same as a uid give'r
+    sent."""
+    container.home.mkdir(parents=True)
+
+    with pytest.raises(SystemExit) as exc:
+        _drive(["python", "-m", "giver.kernel"], env={}, running_as=0)
 
     assert exc.value.code == 1
 

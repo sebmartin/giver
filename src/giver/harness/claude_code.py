@@ -4,6 +4,7 @@ import logging
 import os
 from pathlib import Path
 
+from giver.harness.preinstall import NODE
 from giver.harness.process import spawn
 from giver.harness.protocol import AgentStep
 
@@ -28,8 +29,9 @@ class ClaudeCodeHarness:
     # `claude setup-token` mints a credential without one. Do not invent values.
     env: dict[str, str] = {}
     ports: tuple[str, ...] = ()
-    repl_cmd = ("claude",)
+    repl_cmd: tuple[str, ...] = ("claude",)
     install = "npm install -g @anthropic-ai/claude-code"
+    pre_install: tuple[str, ...] = (NODE,)
 
     _VENDORS = frozenset({"anthropic"})
 

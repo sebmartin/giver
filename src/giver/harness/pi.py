@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 
+from giver.harness.preinstall import NODE
 from giver.harness.process import spawn
 from giver.harness.protocol import AgentStep
 
@@ -18,10 +19,11 @@ class PiHarness:
 
     name = "pi"
     state_path = "~/.pi/agent"
-    env = {"PI_OAUTH_CALLBACK_HOST": "0.0.0.0"}
-    ports = ("53692:53692",)
-    repl_cmd = ("pi",)
+    env: dict[str, str] = {"PI_OAUTH_CALLBACK_HOST": "0.0.0.0"}
+    ports: tuple[str, ...] = ("53692:53692",)
+    repl_cmd: tuple[str, ...] = ("pi",)
     install = "npm install -g --ignore-scripts @earendil-works/pi-coding-agent"
+    pre_install: tuple[str, ...] = (NODE,)
 
     # `--fork <id>` branches rather than continuing in place.
     forks_on_resume = True

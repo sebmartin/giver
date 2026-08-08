@@ -36,6 +36,12 @@ class Harness(Protocol):
     repl_cmd: tuple[str, ...]  # interactive launch argv
     install: str  # shell command that installs it; one generated RUN line
 
+    # Shell commands that run before `install`, so it finds what it depends on
+    # already present. Each becomes a RUN line. An image deduplicates them by
+    # exact string across all its harnesses, so harnesses that share the NODE
+    # constant from `preinstall` get one node layer between them.
+    pre_install: tuple[str, ...]
+
     # Can it branch a session instead of continuing it in place? Branching
     # leaves the parent untouched, which is what makes replaying a step safe.
     # pi and claude-code can; codex cannot. Read it rather than assume it.

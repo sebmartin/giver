@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 
+from giver.harness.preinstall import NODE
 from giver.harness.process import spawn
 from giver.harness.protocol import AgentStep
 
@@ -26,8 +27,9 @@ class CodexHarness:
     # Unset until an interactive `giver shell codex` login is observed.
     env: dict[str, str] = {}
     ports: tuple[str, ...] = ()
-    repl_cmd = ("codex",)
+    repl_cmd: tuple[str, ...] = ("codex",)
     install = "npm install -g @openai/codex"
+    pre_install: tuple[str, ...] = (NODE,)
 
     # Resuming continues in place rather than branching, so a replayed step
     # mutates the session it resumed from. Anything that replays work has to

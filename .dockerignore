@@ -5,3 +5,12 @@ __pycache__
 runs/
 *.egg-info
 dist
+
+# The generated Dockerfile copies pyproject.toml, uv.lock and src/ — everything
+# else is context Docker uploads and never reads.
+tests/
+docs/
+examples/
+.pytest_cache/
+.vscode/
+.claude/

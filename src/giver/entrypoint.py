@@ -83,14 +83,13 @@ def _refuse_root(uid: int) -> None:
 
 
 def _require_a_writable_home() -> None:
-    """Refuse to exec into a container nobody has set up.
+    """Refuse to exec when `$HOME` is missing or not writable.
 
-    An unset `GIVER_UID` means somebody else started this container, which
-    normally means one with a home to go with its user. The image give'r
-    generates has neither, so `docker run --user 1000` on it passes the root
-    check and still has `$HOME` pointing at a directory `useradd -m` never
-    created. Harnesses resolve `~` from `$HOME` and would write their
-    credentials into a path that is not there.
+    An unset `GIVER_UID` means somebody else started this container, and theirs
+    will have a home. The image give'r generates has no user and no home, so
+    `docker run --user 1000` on it passes the root check and still has `$HOME`
+    pointing at a directory `useradd -m` never created. Harnesses resolve `~`
+    from `$HOME` and would write credentials into a path that is not there.
 
     Runs after `_refuse_root` because `os.access` reports almost everything as
     writable to root, so at uid 0 it proves nothing.
@@ -99,10 +98,9 @@ def _require_a_writable_home() -> None:
     if home.is_dir() and os.access(home, os.W_OK):
         return
     print(
-        f"error: no writable home at {home}, so this container has not been "
-        "set up for anyone. An image give'r generated carries no user; run it "
-        "with -e GIVER_UID=$(id -u) -e GIVER_GID=$(id -g) and this entrypoint "
-        "will make the account.",
+        f"error: $HOME ({home}) does not exist or is not writable. An image "
+        "give'r generated carries no user; run it with -e GIVER_UID=$(id -u) "
+        "-e GIVER_GID=$(id -g) and this entrypoint will make the account.",
         file=sys.stderr,
     )
     raise SystemExit(1)

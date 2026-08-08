@@ -44,14 +44,14 @@ def main(argv: list[str] | None = None) -> None:
     if requested is None:
         # No uid was sent, so we are whatever the image started as and there is
         # no account to make: this can only check what it was given.
-        _refuse_root(os.geteuid())
-        _require_a_writable_home()
+        _ensure_not_root(os.geteuid())
+        _ensure_writable_home()
         os.execvp(argv[0], argv)
         return  # execvp replaces this process; returning is not control flow
 
     uid = int(requested)
     gid = int(os.environ.get("GIVER_GID") or uid)
-    _refuse_root(uid)
+    _ensure_not_root(uid)
 
     name = _ensure_account(uid, gid)
     _take_ownership(uid, gid)
@@ -59,7 +59,7 @@ def main(argv: list[str] | None = None) -> None:
     os.execvp(argv[0], argv)
 
 
-def _refuse_root(uid: int) -> None:
+def _ensure_not_root(uid: int) -> None:
     """Refuse a container that would run as uid 0.
 
     claude-code refuses to run headless as root (issue #9), so a workflow that
@@ -82,7 +82,7 @@ def _refuse_root(uid: int) -> None:
     raise SystemExit(1)
 
 
-def _require_a_writable_home() -> None:
+def _ensure_writable_home() -> None:
     """Refuse to exec when `$HOME` is missing or not writable.
 
     An unset `GIVER_UID` means somebody else started this container, and theirs
@@ -91,8 +91,8 @@ def _require_a_writable_home() -> None:
     pointing at a directory `useradd -m` never created. Harnesses resolve `~`
     from `$HOME` and would write credentials into a path that is not there.
 
-    Runs after `_refuse_root` because `os.access` reports almost everything as
-    writable to root, so at uid 0 it proves nothing.
+    Runs after `_ensure_not_root` because `os.access` reports almost everything
+    as writable to root, so at uid 0 it proves nothing.
     """
     home = Path(os.environ.get("HOME", HOME))
     if home.is_dir() and os.access(home, os.W_OK):

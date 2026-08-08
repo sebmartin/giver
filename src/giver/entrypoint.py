@@ -42,9 +42,8 @@ def main(argv: list[str] | None = None) -> None:
 
     requested = os.environ.get("GIVER_UID")
     if requested is None:
-        # Nobody handed us a uid, so we are whoever the image starts as and
-        # nothing here can change that. Both checks are about the container we
-        # were given rather than one we are about to make.
+        # No uid was sent, so we are whatever the image started as and there is
+        # no account to make: this can only check what it was given.
         _refuse_root(os.geteuid())
         _refuse_a_home_that_is_not_there()
         os.execvp(argv[0], argv)
@@ -61,15 +60,15 @@ def main(argv: list[str] | None = None) -> None:
 
 
 def _refuse_root(uid: int) -> None:
-    """Root is not a user to drop to, and harnesses will not run as one.
+    """Refuse a container that would run as uid 0.
 
-    claude-code refuses to run headless as uid 0 (issue #9), so a workflow that
+    claude-code refuses to run headless as root (issue #9), so a workflow that
     reaches a harness fails several minutes in and reports it as a harness
     error. On Linux the uid also crosses the /runs bind mount unchanged, so the
     logs and artifacts come out owned by a user who cannot delete them.
 
-    Applies to a uid give'r sent and to the one we already are, because the
-    reason is the same either way.
+    Called with the uid give'r sent, and on the other path with the uid the
+    container already has.
     """
     if uid != 0:
         return
@@ -86,15 +85,15 @@ def _refuse_root(uid: int) -> None:
 def _refuse_a_home_that_is_not_there() -> None:
     """Refuse to exec into a container nobody has set up.
 
-    An unset `GIVER_UID` was taken to mean somebody else started this container
-    and has already done the setup. The image give'r generates carries no user,
-    so a `docker run --user 1000` on it clears the root check above and still
-    has `$HOME` pointing at a directory `useradd -m` never created. Harnesses
-    resolve `~` from `$HOME` and would write their credentials into a path that
-    is not there.
+    An unset `GIVER_UID` means somebody else started this container, which
+    normally means one with a home to go with its user. The image give'r
+    generates has neither, so `docker run --user 1000` on it passes the root
+    check and still has `$HOME` pointing at a directory `useradd -m` never
+    created. Harnesses resolve `~` from `$HOME` and would write their
+    credentials into a path that is not there.
 
-    Only meaningful below root, for whom almost everything is writable — which
-    is why the root check comes first rather than this standing alone.
+    Runs after `_refuse_root` because `os.access` reports almost everything as
+    writable to root, so at uid 0 it proves nothing.
     """
     home = Path(os.environ.get("HOME", HOME))
     if home.is_dir() and os.access(home, os.W_OK):

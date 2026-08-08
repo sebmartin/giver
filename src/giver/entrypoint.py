@@ -45,7 +45,7 @@ def main(argv: list[str] | None = None) -> None:
         # No uid was sent, so we are whatever the image started as and there is
         # no account to make: this can only check what it was given.
         _refuse_root(os.geteuid())
-        _refuse_a_home_that_is_not_there()
+        _require_a_writable_home()
         os.execvp(argv[0], argv)
         return  # execvp replaces this process; returning is not control flow
 
@@ -82,7 +82,7 @@ def _refuse_root(uid: int) -> None:
     raise SystemExit(1)
 
 
-def _refuse_a_home_that_is_not_there() -> None:
+def _require_a_writable_home() -> None:
     """Refuse to exec into a container nobody has set up.
 
     An unset `GIVER_UID` means somebody else started this container, which

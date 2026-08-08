@@ -37,6 +37,8 @@ uv run pytest -v     # verbose
 - Logging is scoped to an execution — `Logger` sets up handlers per node name, is used as a context manager, and tears down on exit; never accumulate global handlers
 - The CLI is a host-side wrapper that runs the kernel inside a Docker container; the kernel is agnostic of that infrastructure and could run on the host directly. The CLI and kernel may share code, but the kernel must not depend on `cli`.
 - No stubs or empty files — add files when the code exists
+- **Docstrings and comments are short and say what the code does.** A summary line that is a full sentence with a verb, then nothing the reader can already see in the code. Most need no second line. Add one only for a fact the code cannot show: a syscall ordering constraint, a vendor quirk, an issue number, a measurement.
+- **No negating statements in comments.** "This is not fixing a known failure", "nothing here knows what these commands do", "`~` is not one of them" — assert what holds instead, or delete the comment. A comment that reads like a diagnosis has to name a condition and a consequence; if it cannot, there is nothing to explain.
 
 ## Documentation
 

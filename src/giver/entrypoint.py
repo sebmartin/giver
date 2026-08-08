@@ -42,8 +42,7 @@ def main(argv: list[str] | None = None) -> None:
 
     requested = os.environ.get("GIVER_UID")
     if requested is None:
-        # No uid was sent, so we are whatever the image started as and there is
-        # no account to make: this can only check what it was given.
+        # No uid was sent, so the container keeps the one the image started as.
         _ensure_not_root(os.geteuid())
         _ensure_writable_home()
         os.execvp(argv[0], argv)
@@ -60,15 +59,10 @@ def main(argv: list[str] | None = None) -> None:
 
 
 def _ensure_not_root(uid: int) -> None:
-    """Refuse a container that would run as uid 0.
+    """Exit when the container would run as uid 0.
 
-    claude-code refuses to run headless as root (issue #9), so a workflow that
-    reaches a harness fails several minutes in and reports it as a harness
-    error. On Linux the uid also crosses the /runs bind mount unchanged, so the
-    logs and artifacts come out owned by a user who cannot delete them.
-
-    Called with the uid give'r sent, and on the other path with the uid the
-    container already has.
+    claude-code refuses to run headless as root (issue #9), and on Linux the
+    uid crosses the /runs bind mount, so artifacts come out root-owned.
     """
     if uid != 0:
         return
@@ -83,16 +77,14 @@ def _ensure_not_root(uid: int) -> None:
 
 
 def _ensure_writable_home() -> None:
-    """Refuse to exec when `$HOME` is missing or not writable.
+    """Exit when `$HOME` is missing or not writable.
 
-    An unset `GIVER_UID` means somebody else started this container, and theirs
-    will have a home. The image give'r generates has no user and no home, so
-    `docker run --user 1000` on it passes the root check and still has `$HOME`
-    pointing at a directory `useradd -m` never created. Harnesses resolve `~`
-    from `$HOME` and would write credentials into a path that is not there.
+    Harnesses resolve `~` from `$HOME`, and the image give'r generates has no
+    user and no home, so `docker run --user 1000` on it would write every
+    credential to a dangling path.
 
-    Runs after `_ensure_not_root` because `os.access` reports almost everything
-    as writable to root, so at uid 0 it proves nothing.
+    Runs after `_ensure_not_root`: `os.access` reports almost everything as
+    writable to root.
     """
     home = Path(os.environ.get("HOME", HOME))
     if home.is_dir() and os.access(home, os.W_OK):
@@ -177,10 +169,7 @@ def _take_ownership(uid: int, gid: int) -> None:
         if not state.exists():
             continue
         # Docker creates ~/.pi on its way to mounting ~/.pi/agent and leaves it
-        # owned by root at 0755. No shipped harness writes anything there, so
-        # this is not fixing a known failure: it is keeping the home directory
-        # ordinary, since an account that cannot write inside its own home is
-        # the kind of thing the container is supposed to hide.
+        # root-owned, inside a home this user owns.
         for parent in _under_home(state):
             _own(parent, uid, gid)
         if state.stat().st_uid != uid:
